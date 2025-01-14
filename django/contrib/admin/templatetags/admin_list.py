@@ -10,6 +10,7 @@ from django.contrib.admin.utils import (
 )
 from django.contrib.admin.views.main import (
     ALL_VAR,
+    IS_FACETS_VAR,
     IS_POPUP_VAR,
     ORDER_VAR,
     PAGE_VAR,
@@ -17,6 +18,7 @@ from django.contrib.admin.views.main import (
 )
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import models
+from django.db.models.constants import LOOKUP_SEP
 from django.template import Library
 from django.template.loader import get_template
 from django.templatetags.static import static
@@ -111,7 +113,7 @@ def result_headers(cl):
             # Set ordering for attr that is a property, if defined.
             if isinstance(attr, property) and hasattr(attr, "fget"):
                 admin_order_field = getattr(attr.fget, "admin_order_field", None)
-            if not admin_order_field:
+            if not admin_order_field and LOOKUP_SEP not in field_name:
                 is_field_sortable = False
 
         if not is_field_sortable:
@@ -170,9 +172,9 @@ def result_headers(cl):
             "url_primary": cl.get_query_string({ORDER_VAR: ".".join(o_list_primary)}),
             "url_remove": cl.get_query_string({ORDER_VAR: ".".join(o_list_remove)}),
             "url_toggle": cl.get_query_string({ORDER_VAR: ".".join(o_list_toggle)}),
-            "class_attrib": format_html(' class="{}"', " ".join(th_classes))
-            if th_classes
-            else "",
+            "class_attrib": (
+                format_html(' class="{}"', " ".join(th_classes)) if th_classes else ""
+            ),
         }
 
 
@@ -212,6 +214,7 @@ def items_for_result(cl, result, form):
     for field_index, field_name in enumerate(cl.list_display):
         empty_value_display = cl.model_admin.get_empty_value_display()
         row_classes = ["field-%s" % _coerce_field_name(field_name, field_index)]
+        link_to_changelist = link_in_col(first, field_name, cl)
         try:
             f, attr, value = lookup_field(field_name, result, cl.model_admin)
         except ObjectDoesNotExist:
@@ -224,6 +227,9 @@ def items_for_result(cl, result, form):
                 if field_name == "action_checkbox":
                     row_classes = ["action-checkbox"]
                 boolean = getattr(attr, "boolean", False)
+                # Set boolean for attr that is a property, if defined.
+                if isinstance(attr, property) and hasattr(attr, "fget"):
+                    boolean = getattr(attr.fget, "boolean", False)
                 result_repr = display_for_value(value, empty_value_display, boolean)
                 if isinstance(value, (datetime.date, datetime.time)):
                     row_classes.append("nowrap")
@@ -235,14 +241,19 @@ def items_for_result(cl, result, form):
                     else:
                         result_repr = field_val
                 else:
-                    result_repr = display_for_field(value, f, empty_value_display)
+                    result_repr = display_for_field(
+                        value,
+                        f,
+                        empty_value_display,
+                        avoid_link=link_to_changelist,
+                    )
                 if isinstance(
                     f, (models.DateField, models.TimeField, models.ForeignKey)
                 ):
                     row_classes.append("nowrap")
         row_class = mark_safe(' class="%s"' % " ".join(row_classes))
         # If list_display_links not defined, add the link tag to the first field
-        if link_in_col(first, field_name, cl):
+        if link_to_changelist:
             table_tag = "th" if first else "td"
             first = False
 
@@ -266,9 +277,11 @@ def items_for_result(cl, result, form):
                 link_or_text = format_html(
                     '<a href="{}"{}>{}</a>',
                     url,
-                    format_html(' data-popup-opener="{}"', value)
-                    if cl.is_popup
-                    else "",
+                    (
+                        format_html(' data-popup-opener="{}"', value)
+                        if cl.is_popup
+                        else ""
+                    ),
                     result_repr,
                 )
 
@@ -475,6 +488,7 @@ def search_form(cl):
         "show_result_count": cl.result_count != cl.full_result_count,
         "search_var": SEARCH_VAR,
         "is_popup_var": IS_POPUP_VAR,
+        "is_facets_var": IS_FACETS_VAR,
     }
 
 

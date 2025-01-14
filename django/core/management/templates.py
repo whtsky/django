@@ -5,7 +5,7 @@ import posixpath
 import shutil
 import stat
 import tempfile
-from importlib import import_module
+from importlib.util import find_spec
 from urllib.request import build_opener
 
 import django
@@ -229,7 +229,7 @@ class TemplateCommand(BaseCommand):
                 else:
                     shutil.rmtree(path_to_remove)
 
-        run_formatters([top_dir], **formatter_paths)
+        run_formatters([top_dir], **formatter_paths, stderr=self.stderr)
 
     def handle_template(self, template, subdir):
         """
@@ -275,12 +275,8 @@ class TemplateCommand(BaseCommand):
                     type=name_or_dir,
                 )
             )
-        # Check it cannot be imported.
-        try:
-            import_module(name)
-        except ImportError:
-            pass
-        else:
+        # Check that __spec__ doesn't exist.
+        if find_spec(name) is not None:
             raise CommandError(
                 "'{name}' conflicts with the name of an existing Python "
                 "module and cannot be used as {an} {app} {type}. Please try "

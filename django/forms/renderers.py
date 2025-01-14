@@ -19,6 +19,7 @@ def get_default_renderer():
 class BaseRenderer:
     form_template_name = "django/forms/div.html"
     formset_template_name = "django/forms/formsets/div.html"
+    field_template_name = "django/forms/field.html"
 
     def get_template(self, template_name):
         raise NotImplementedError("subclasses must implement get_template()")
@@ -79,8 +80,9 @@ class DjangoDivFormRenderer(DjangoTemplates):
             "The DjangoDivFormRenderer transitional form renderer is deprecated. Use "
             "DjangoTemplates instead.",
             RemovedInDjango60Warning,
+            stacklevel=2,
         )
-        super.__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
 
 # RemovedInDjango60Warning.
@@ -95,8 +97,9 @@ class Jinja2DivFormRenderer(Jinja2):
             "The Jinja2DivFormRenderer transitional form renderer is deprecated. Use "
             "Jinja2 instead.",
             RemovedInDjango60Warning,
+            stacklevel=2,
         )
-        super.__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
 
 class TemplatesSetting(BaseRenderer):

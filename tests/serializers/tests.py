@@ -7,6 +7,7 @@ from django.core import serializers
 from django.core.serializers import SerializerDoesNotExist
 from django.core.serializers.base import ProgressBar
 from django.db import connection, transaction
+from django.db.models import Prefetch
 from django.http import HttpResponse
 from django.test import SimpleTestCase, override_settings, skipUnlessDBFeature
 from django.test.utils import Approximate
@@ -18,6 +19,7 @@ from .models import (
     AuthorProfile,
     BaseModel,
     Category,
+    CategoryMetaData,
     Child,
     ComplexModel,
     Movie,
@@ -73,7 +75,7 @@ class SerializerRegistrationTests(SimpleTestCase):
         all_formats = set(serializers.get_serializer_formats())
         public_formats = set(serializers.get_public_serializer_formats())
 
-        self.assertIn("xml", all_formats),
+        self.assertIn("xml", all_formats)
         self.assertIn("xml", public_formats)
 
         self.assertIn("json2", all_formats)
@@ -155,7 +157,7 @@ class SerializersTestBase:
             if isinstance(stream, StringIO):
                 self.assertEqual(string_data, stream.getvalue())
             else:
-                self.assertEqual(string_data, stream.content.decode())
+                self.assertEqual(string_data, stream.text)
 
     def test_serialize_specific_fields(self):
         obj = ComplexModel(field1="first", field2="second", field3="third")
@@ -275,17 +277,44 @@ class SerializersTestBase:
             serializers.serialize(self.serializer_name, [mv])
 
     def test_serialize_prefetch_related_m2m(self):
-        # One query for the Article table and one for each prefetched m2m
-        # field.
-        with self.assertNumQueries(3):
+        # One query for the Article table, one for each prefetched m2m
+        # field, and one extra one for the nested prefetch for the Topics
+        # that have a relationship to the Category.
+        with self.assertNumQueries(5):
             serializers.serialize(
                 self.serializer_name,
-                Article.objects.prefetch_related("categories", "meta_data"),
+                Article.objects.prefetch_related(
+                    "meta_data",
+                    "topics",
+                    Prefetch(
+                        "categories",
+                        queryset=Category.objects.prefetch_related("topic_set"),
+                    ),
+                ),
             )
-        # One query for the Article table, and two m2m queries for each
+        # One query for the Article table, and three m2m queries for each
         # article.
-        with self.assertNumQueries(5):
+        with self.assertNumQueries(7):
             serializers.serialize(self.serializer_name, Article.objects.all())
+
+    def test_serialize_prefetch_related_m2m_with_natural_keys(self):
+        # One query for the Article table, one for each prefetched m2m
+        # field, and a query to get the categories for each Article (two in
+        # total).
+        with self.assertNumQueries(5):
+            serializers.serialize(
+                self.serializer_name,
+                Article.objects.prefetch_related(
+                    Prefetch(
+                        "meta_data",
+                        queryset=CategoryMetaData.objects.prefetch_related(
+                            "category_set"
+                        ),
+                    ),
+                    "topics",
+                ),
+                use_natural_foreign_keys=True,
+            )
 
     def test_serialize_with_null_pk(self):
         """
@@ -409,7 +438,7 @@ class SerializersTestBase:
         self.assertEqual(self._get_field_values(child_data, "parent_data"), [])
 
     def test_serialize_only_pk(self):
-        with self.assertNumQueries(5) as ctx:
+        with self.assertNumQueries(7) as ctx:
             serializers.serialize(
                 self.serializer_name,
                 Article.objects.all(),
@@ -420,9 +449,11 @@ class SerializersTestBase:
         self.assertNotIn(connection.ops.quote_name("meta_data_id"), categories_sql)
         meta_data_sql = ctx[2]["sql"]
         self.assertNotIn(connection.ops.quote_name("kind"), meta_data_sql)
+        topics_data_sql = ctx[3]["sql"]
+        self.assertNotIn(connection.ops.quote_name("category_id"), topics_data_sql)
 
     def test_serialize_no_only_pk_with_natural_keys(self):
-        with self.assertNumQueries(5) as ctx:
+        with self.assertNumQueries(7) as ctx:
             serializers.serialize(
                 self.serializer_name,
                 Article.objects.all(),
@@ -434,6 +465,8 @@ class SerializersTestBase:
         # CategoryMetaData has natural_key().
         meta_data_sql = ctx[2]["sql"]
         self.assertIn(connection.ops.quote_name("kind"), meta_data_sql)
+        topics_data_sql = ctx[3]["sql"]
+        self.assertNotIn(connection.ops.quote_name("category_id"), topics_data_sql)
 
 
 class SerializerAPITests(SimpleTestCase):

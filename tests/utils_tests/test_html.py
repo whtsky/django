@@ -1,14 +1,17 @@
 import os
 from datetime import datetime
 
+from django.core.exceptions import SuspiciousOperation
 from django.core.serializers.json import DjangoJSONEncoder
 from django.test import SimpleTestCase
+from django.utils.deprecation import RemovedInDjango60Warning
 from django.utils.functional import lazystr
 from django.utils.html import (
     conditional_escape,
     escape,
     escapejs,
     format_html,
+    format_html_join,
     html_safe,
     json_script,
     linebreaks,
@@ -65,6 +68,36 @@ class TestUtilsHtml(SimpleTestCase):
             "&lt; Dangerous &gt; <b>safe</b> &lt; dangerous again <i>safe again</i>",
         )
 
+    def test_format_html_no_params(self):
+        msg = "Calling format_html() without passing args or kwargs is deprecated."
+        # RemovedInDjango60Warning: when the deprecation ends, replace with:
+        # msg = "args or kwargs must be provided."
+        # with self.assertRaisesMessage(TypeError, msg):
+        with self.assertWarnsMessage(RemovedInDjango60Warning, msg) as ctx:
+            name = "Adam"
+            self.assertEqual(format_html(f"<i>{name}</i>"), "<i>Adam</i>")
+        self.assertEqual(ctx.filename, __file__)
+
+    def test_format_html_join_with_positional_arguments(self):
+        self.assertEqual(
+            format_html_join(
+                "\n",
+                "<li>{}) {}</li>",
+                [(1, "Emma"), (2, "Matilda")],
+            ),
+            "<li>1) Emma</li>\n<li>2) Matilda</li>",
+        )
+
+    def test_format_html_join_with_keyword_arguments(self):
+        self.assertEqual(
+            format_html_join(
+                "\n",
+                "<li>{id}) {text}</li>",
+                [{"id": 1, "text": "Emma"}, {"id": 2, "text": "Matilda"}],
+            ),
+            "<li>1) Emma</li>\n<li>2) Matilda</li>",
+        )
+
     def test_linebreaks(self):
         items = (
             ("para1\n\npara2\r\rpara3", "<p>para1</p>\n\n<p>para2</p>\n\n<p>para3</p>"),
@@ -113,11 +146,17 @@ class TestUtilsHtml(SimpleTestCase):
             ("<script>alert()</script>&h", "alert()h"),
             ("><!" + ("&" * 16000) + "D", "><!" + ("&" * 16000) + "D"),
             ("X<<<<br>br>br>br>X", "XX"),
+            ("<" * 50 + "a>" * 50, ""),
         )
         for value, output in items:
             with self.subTest(value=value, output=output):
                 self.check_output(strip_tags, value, output)
                 self.check_output(strip_tags, lazystr(value), output)
+
+    def test_strip_tags_suspicious_operation(self):
+        value = "<" * 51 + "a>" * 51, "<a>"
+        with self.assertRaises(SuspiciousOperation):
+            strip_tags(value)
 
     def test_strip_tags_files(self):
         # Test with more lengthy content (also catching performance regressions)
@@ -328,6 +367,28 @@ class TestUtilsHtml(SimpleTestCase):
                 'Search for <a href="http://google.com/?q=">google.com/?q=</a>!',
             ),
             ("foo@example.com", '<a href="mailto:foo@example.com">foo@example.com</a>'),
+            (
+                "test@" + "한.글." * 15 + "aaa",
+                '<a href="mailto:test@'
+                + "xn--6q8b.xn--bj0b." * 15
+                + 'aaa">'
+                + "test@"
+                + "한.글." * 15
+                + "aaa</a>",
+            ),
+            (
+                # RFC 6068 requires a mailto URI to percent-encode a number of
+                # characters that can appear in <addr-spec>.
+                "yes;this=is&a%valid!email@example.com",
+                '<a href="mailto:yes%3Bthis%3Dis%26a%25valid%21email@example.com"'
+                ">yes;this=is&a%valid!email@example.com</a>",
+            ),
+            (
+                # Urlizer shouldn't urlize the "?org" part of this. But since
+                # it does, RFC 6068 requires percent encoding the "?".
+                "test@example.com?org",
+                '<a href="mailto:test@example.com%3Forg">test@example.com?org</a>',
+            ),
         )
         for value, output in tests:
             with self.subTest(value=value):
@@ -336,12 +397,26 @@ class TestUtilsHtml(SimpleTestCase):
     def test_urlize_unchanged_inputs(self):
         tests = (
             ("a" + "@a" * 50000) + "a",  # simple_email_re catastrophic test
+            # Unicode domain catastrophic tests.
+            "a@" + "한.글." * 1_000_000 + "a",
+            "http://" + "한.글." * 1_000_000 + "com",
+            "www." + "한.글." * 1_000_000 + "com",
             ("a" + "." * 1000000) + "a",  # trailing_punctuation catastrophic test
             "foo@",
             "@foo.com",
             "foo@.example.com",
             "foo@localhost",
             "foo@localhost.",
+            # trim_punctuation catastrophic tests
+            "(" * 100_000 + ":" + ")" * 100_000,
+            "(" * 100_000 + "&:" + ")" * 100_000,
+            "([" * 100_000 + ":" + "])" * 100_000,
+            "[(" * 100_000 + ":" + ")]" * 100_000,
+            "([[" * 100_000 + ":" + "]])" * 100_000,
+            "&:" + ";" * 100_000,
+            "&.;" * 100_000,
+            ".;" * 100_000,
+            "&" + ";:" * 100_000,
         )
         for value in tests:
             with self.subTest(value=value):

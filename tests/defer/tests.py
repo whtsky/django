@@ -6,6 +6,7 @@ from .models import (
     Child,
     ChildProxy,
     Primary,
+    PrimaryOneToOne,
     RefreshPrimaryProxy,
     Secondary,
     ShadowChild,
@@ -178,6 +179,11 @@ class DeferTests(AssertionMixin, TestCase):
         obj = ShadowChild.objects.defer("name").get()
         self.assertEqual(obj.name, "adonis")
 
+    def test_defer_fk_attname(self):
+        primary = Primary.objects.defer("related_id").get()
+        with self.assertNumQueries(1):
+            self.assertEqual(primary.related_id, self.p1.related_id)
+
 
 class BigChildDeferTests(AssertionMixin, TestCase):
     @classmethod
@@ -284,6 +290,14 @@ class TestDefer2(AssertionMixin, TestCase):
             self.assertEqual(rf2.name, "new foo")
             self.assertEqual(rf2.value, "new bar")
 
+    def test_refresh_when_one_field_deferred(self):
+        s = Secondary.objects.create()
+        PrimaryOneToOne.objects.create(name="foo", value="bar", related=s)
+        s = Secondary.objects.defer("first").get()
+        p_before = s.primary_o2o
+        s.refresh_from_db()
+        self.assertIsNot(s.primary_o2o, p_before)
+
 
 class InvalidDeferTests(SimpleTestCase):
     def test_invalid_defer(self):
@@ -321,3 +335,28 @@ class InvalidDeferTests(SimpleTestCase):
         )
         with self.assertRaisesMessage(FieldError, msg):
             Primary.objects.only("name").select_related("related")[0]
+
+
+class DeferredRelationTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.secondary = Secondary.objects.create(first="a", second="b")
+        cls.primary = PrimaryOneToOne.objects.create(
+            name="Bella", value="Baxter", related=cls.secondary
+        )
+
+    def test_defer_not_clear_cached_relations(self):
+        obj = Secondary.objects.defer("first").get(pk=self.secondary.pk)
+        with self.assertNumQueries(1):
+            obj.primary_o2o
+        obj.first  # Accessing a deferred field.
+        with self.assertNumQueries(0):
+            obj.primary_o2o
+
+    def test_only_not_clear_cached_relations(self):
+        obj = Secondary.objects.only("first").get(pk=self.secondary.pk)
+        with self.assertNumQueries(1):
+            obj.primary_o2o
+        obj.second  # Accessing a deferred field.
+        with self.assertNumQueries(0):
+            obj.primary_o2o

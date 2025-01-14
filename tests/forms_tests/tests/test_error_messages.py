@@ -23,7 +23,8 @@ from django.forms import (
     utils,
 )
 from django.template import Context, Template
-from django.test import SimpleTestCase, TestCase
+from django.test import SimpleTestCase, TestCase, ignore_warnings
+from django.utils.deprecation import RemovedInDjango60Warning
 from django.utils.safestring import mark_safe
 
 from ..models import ChoiceModel
@@ -167,7 +168,8 @@ class FormsErrorMessagesTestCase(SimpleTestCase, AssertFormErrorsMixin):
             "invalid": "INVALID",
             "max_length": '"%(value)s" has more than %(limit_value)d characters.',
         }
-        f = URLField(error_messages=e, max_length=17)
+        with ignore_warnings(category=RemovedInDjango60Warning):
+            f = URLField(error_messages=e, max_length=17)
         self.assertFormErrors(["REQUIRED"], f.clean, "")
         self.assertFormErrors(["INVALID"], f.clean, "abc.c")
         self.assertFormErrors(
@@ -247,7 +249,8 @@ class FormsErrorMessagesTestCase(SimpleTestCase, AssertFormErrorsMixin):
         form1 = TestForm({"first_name": "John"})
         self.assertHTMLEqual(
             str(form1["last_name"].errors),
-            '<ul class="errorlist"><li>This field is required.</li></ul>',
+            '<ul class="errorlist" id="id_last_name_error"><li>'
+            "This field is required.</li></ul>",
         )
         self.assertHTMLEqual(
             str(form1.errors["__all__"]),
@@ -278,7 +281,7 @@ class FormsErrorMessagesTestCase(SimpleTestCase, AssertFormErrorsMixin):
         f = SomeForm({"field": "<script>"})
         self.assertHTMLEqual(
             t.render(Context({"form": f})),
-            '<ul class="errorlist"><li>field<ul class="errorlist">'
+            '<ul class="errorlist"><li>field<ul class="errorlist" id="id_field_error">'
             "<li>Select a valid choice. &lt;script&gt; is not one of the "
             "available choices.</li></ul></li></ul>",
         )
@@ -289,7 +292,7 @@ class FormsErrorMessagesTestCase(SimpleTestCase, AssertFormErrorsMixin):
         f = SomeForm({"field": ["<script>"]})
         self.assertHTMLEqual(
             t.render(Context({"form": f})),
-            '<ul class="errorlist"><li>field<ul class="errorlist">'
+            '<ul class="errorlist"><li>field<ul class="errorlist" id="id_field_error">'
             "<li>Select a valid choice. &lt;script&gt; is not one of the "
             "available choices.</li></ul></li></ul>",
         )
@@ -300,7 +303,7 @@ class FormsErrorMessagesTestCase(SimpleTestCase, AssertFormErrorsMixin):
         f = SomeForm({"field": ["<script>"]})
         self.assertHTMLEqual(
             t.render(Context({"form": f})),
-            '<ul class="errorlist"><li>field<ul class="errorlist">'
+            '<ul class="errorlist"><li>field<ul class="errorlist" id="id_field_error">'
             "<li>“&lt;script&gt;” is not a valid value.</li>"
             "</ul></li></ul>",
         )

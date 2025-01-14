@@ -23,6 +23,8 @@ from django.contrib.auth.views import (
     redirect_to_login,
 )
 from django.contrib.contenttypes.models import ContentType
+from django.contrib.messages import Message
+from django.contrib.messages.test import MessagesTestMixin
 from django.contrib.sessions.middleware import SessionMiddleware
 from django.contrib.sites.requests import RequestSite
 from django.core import mail
@@ -30,13 +32,13 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import connection
 from django.http import HttpRequest, HttpResponse
 from django.middleware.csrf import CsrfViewMiddleware, get_token
-from django.test import Client, TestCase, override_settings
+from django.test import Client, TestCase, modify_settings, override_settings
 from django.test.client import RedirectCycleError
 from django.urls import NoReverseMatch, reverse, reverse_lazy
 from django.utils.http import urlsafe_base64_encode
 
 from .client import PasswordResetConfirmClient
-from .models import CustomUser, UUIDUser
+from .models import CustomUser, CustomUserCompositePrimaryKey, UUIDUser
 from .settings import AUTH_TEMPLATES
 
 
@@ -470,6 +472,29 @@ class PasswordResetTest(AuthViewsTestCase):
         with self.assertRaisesMessage(ImproperlyConfigured, msg):
             self.client.get("/reset/missing_parameters/")
 
+    @modify_settings(
+        MIDDLEWARE={"append": "django.contrib.auth.middleware.LoginRequiredMiddleware"}
+    )
+    def test_access_under_login_required_middleware(self):
+        reset_urls = [
+            reverse("password_reset"),
+            reverse("password_reset_done"),
+            reverse("password_reset_confirm", kwargs={"uidb64": "abc", "token": "def"}),
+            reverse("password_reset_complete"),
+        ]
+
+        for url in reset_urls:
+            with self.subTest(url=url):
+                response = self.client.get(url)
+                self.assertEqual(response.status_code, 200)
+
+        response = self.client.post(
+            "/password_reset/", {"email": "staffmember@example.com"}
+        )
+        self.assertRedirects(
+            response, "/password_reset/done/", fetch_redirect_response=False
+        )
+
 
 @override_settings(AUTH_USER_MODEL="auth_tests.CustomUser")
 class CustomUserPasswordResetTest(AuthViewsTestCase):
@@ -513,6 +538,18 @@ class CustomUserPasswordResetTest(AuthViewsTestCase):
             },
         )
         self.assertRedirects(response, "/reset/done/")
+
+
+@override_settings(AUTH_USER_MODEL="auth_tests.CustomUserCompositePrimaryKey")
+class CustomUserCompositePrimaryKeyPasswordResetTest(CustomUserPasswordResetTest):
+    @classmethod
+    def setUpTestData(cls):
+        cls.u1 = CustomUserCompositePrimaryKey.custom_objects.create(
+            email="staffmember@example.com",
+            date_of_birth=datetime.date(1976, 11, 8),
+        )
+        cls.u1.set_password("password")
+        cls.u1.save()
 
 
 @override_settings(AUTH_USER_MODEL="auth_tests.UUIDUser")
@@ -657,6 +694,38 @@ class ChangePasswordTest(AuthViewsTestCase):
         )
         self.assertRedirects(
             response, "/password_reset/", fetch_redirect_response=False
+        )
+
+    @modify_settings(
+        MIDDLEWARE={"append": "django.contrib.auth.middleware.LoginRequiredMiddleware"}
+    )
+    def test_access_under_login_required_middleware(self):
+        response = self.client.post(
+            "/password_change/",
+            {
+                "old_password": "password",
+                "new_password1": "password1",
+                "new_password2": "password1",
+            },
+        )
+        self.assertRedirects(
+            response,
+            settings.LOGIN_URL + "?next=/password_change/",
+            fetch_redirect_response=False,
+        )
+
+        self.login()
+
+        response = self.client.post(
+            "/password_change/",
+            {
+                "old_password": "password",
+                "new_password1": "password1",
+                "new_password2": "password1",
+            },
+        )
+        self.assertRedirects(
+            response, "/password_change/done/", fetch_redirect_response=False
         )
 
 
@@ -818,9 +887,9 @@ class LoginTest(AuthViewsTestCase):
         # Use POST request to log in
         SessionMiddleware(get_response).process_request(req)
         CsrfViewMiddleware(get_response).process_view(req, LoginView.as_view(), (), {})
-        req.META[
-            "SERVER_NAME"
-        ] = "testserver"  # Required to have redirect work in login view
+        req.META["SERVER_NAME"] = (
+            "testserver"  # Required to have redirect work in login view
+        )
         req.META["SERVER_PORT"] = 80
         resp = CsrfViewMiddleware(LoginView.as_view())(req)
         csrf_cookie = resp.cookies.get(settings.CSRF_COOKIE_NAME, None)
@@ -901,6 +970,13 @@ class LoginTest(AuthViewsTestCase):
     def test_login_redirect_url_overrides_get_default_redirect_url(self):
         response = self.login(url="/login/get_default_redirect_url/?next=/test/")
         self.assertRedirects(response, "/test/", fetch_redirect_response=False)
+
+    @modify_settings(
+        MIDDLEWARE={"append": "django.contrib.auth.middleware.LoginRequiredMiddleware"}
+    )
+    def test_access_under_login_required_middleware(self):
+        response = self.client.get(reverse("login"))
+        self.assertEqual(response.status_code, 200)
 
 
 class LoginURLSettings(AuthViewsTestCase):
@@ -1353,6 +1429,22 @@ class LogoutTest(AuthViewsTestCase):
         self.assertContains(response, "Logged out")
         self.confirm_logged_out()
 
+    @modify_settings(
+        MIDDLEWARE={"append": "django.contrib.auth.middleware.LoginRequiredMiddleware"}
+    )
+    def test_access_under_login_required_middleware(self):
+        response = self.client.post("/logout/")
+        self.assertRedirects(
+            response,
+            settings.LOGIN_URL + "?next=/logout/",
+            fetch_redirect_response=False,
+        )
+
+        self.login()
+
+        response = self.client.post("/logout/")
+        self.assertEqual(response.status_code, 200)
+
 
 def get_perm(Model, perm):
     ct = ContentType.objects.get_for_model(Model)
@@ -1361,8 +1453,11 @@ def get_perm(Model, perm):
 
 # Redirect in test_user_change_password will fail if session auth hash
 # isn't updated after password change (#21649)
-@override_settings(ROOT_URLCONF="auth_tests.urls_admin")
-class ChangelistTests(AuthViewsTestCase):
+@override_settings(
+    ROOT_URLCONF="auth_tests.urls_admin",
+    PASSWORD_HASHERS=["django.contrib.auth.hashers.MD5PasswordHasher"],
+)
+class ChangelistTests(MessagesTestMixin, AuthViewsTestCase):
     @classmethod
     def setUpTestData(cls):
         super().setUpTestData()
@@ -1426,7 +1521,7 @@ class ChangelistTests(AuthViewsTestCase):
         row = LogEntry.objects.latest("id")
         self.assertEqual(row.get_change_message(), "No fields changed.")
 
-    def test_user_change_password(self):
+    def test_user_with_usable_password_change_password(self):
         user_change_url = reverse(
             "auth_test_admin:auth_user_change", args=(self.admin.pk,)
         )
@@ -1437,10 +1532,117 @@ class ChangelistTests(AuthViewsTestCase):
         response = self.client.get(user_change_url)
         # Test the link inside password field help_text.
         rel_link = re.search(
-            r'you can change the password using <a href="([^"]*)">this form</a>',
-            response.content.decode(),
+            r'<a class="button" href="([^"]*)">Reset password</a>',
+            response.text,
         )[1]
         self.assertEqual(urljoin(user_change_url, rel_link), password_change_url)
+
+        response = self.client.get(password_change_url)
+        # Test the form title with original (usable) password
+        self.assertContains(
+            response, f"<h1>Change password: {self.admin.username}</h1>"
+        )
+        # Breadcrumb.
+        self.assertContains(
+            response, f"{self.admin.username}</a>\n&rsaquo; Change password"
+        )
+        # Submit buttons
+        self.assertContains(response, '<input type="submit" name="set-password"')
+        self.assertContains(response, '<input type="submit" name="unset-password"')
+
+        # Password change.
+        response = self.client.post(
+            password_change_url,
+            {
+                "password1": "password1",
+                "password2": "password1",
+            },
+        )
+        self.assertRedirects(response, user_change_url)
+        self.assertMessages(
+            response, [Message(level=25, message="Password changed successfully.")]
+        )
+        row = LogEntry.objects.latest("id")
+        self.assertEqual(row.get_change_message(), "Changed password.")
+        self.logout()
+        self.login(password="password1")
+
+        # Disable password-based authentication without proper submit button.
+        response = self.client.post(
+            password_change_url,
+            {
+                "password1": "password1",
+                "password2": "password1",
+                "usable_password": "false",
+            },
+        )
+        self.assertRedirects(response, password_change_url)
+        self.assertMessages(
+            response,
+            [
+                Message(
+                    level=40,
+                    message="Conflicting form data submitted. Please try again.",
+                )
+            ],
+        )
+        # No password change yet.
+        self.login(password="password1")
+
+        # Disable password-based authentication with proper submit button.
+        response = self.client.post(
+            password_change_url,
+            {
+                "password1": "password1",
+                "password2": "password1",
+                "usable_password": "false",
+                "unset-password": 1,
+            },
+        )
+        self.assertRedirects(response, user_change_url)
+        self.assertMessages(
+            response,
+            [Message(level=25, message="Password-based authentication was disabled.")],
+        )
+        row = LogEntry.objects.latest("id")
+        self.assertEqual(row.get_change_message(), "Changed password.")
+        self.logout()
+        # Password-based authentication was disabled.
+        with self.assertRaises(AssertionError):
+            self.login(password="password1")
+        self.admin.refresh_from_db()
+        self.assertIs(self.admin.has_usable_password(), False)
+
+    def test_user_with_unusable_password_change_password(self):
+        # Test for title with unusable password with a test user
+        test_user = User.objects.get(email="staffmember@example.com")
+        test_user.set_unusable_password()
+        test_user.save()
+        user_change_url = reverse(
+            "auth_test_admin:auth_user_change", args=(test_user.pk,)
+        )
+        password_change_url = reverse(
+            "auth_test_admin:auth_user_password_change", args=(test_user.pk,)
+        )
+
+        response = self.client.get(user_change_url)
+        # Test the link inside password field help_text.
+        rel_link = re.search(
+            r'<a class="button" href="([^"]*)">Set password</a>',
+            response.text,
+        )[1]
+        self.assertEqual(urljoin(user_change_url, rel_link), password_change_url)
+
+        response = self.client.get(password_change_url)
+        # Test the form title with original (usable) password
+        self.assertContains(response, f"<h1>Set password: {test_user.username}</h1>")
+        # Breadcrumb.
+        self.assertContains(
+            response, f"{test_user.username}</a>\n&rsaquo; Set password"
+        )
+        # Submit buttons
+        self.assertContains(response, '<input type="submit" name="set-password"')
+        self.assertNotContains(response, '<input type="submit" name="unset-password"')
 
         response = self.client.post(
             password_change_url,
@@ -1450,10 +1652,11 @@ class ChangelistTests(AuthViewsTestCase):
             },
         )
         self.assertRedirects(response, user_change_url)
+        self.assertMessages(
+            response, [Message(level=25, message="Password changed successfully.")]
+        )
         row = LogEntry.objects.latest("id")
         self.assertEqual(row.get_change_message(), "Changed password.")
-        self.logout()
-        self.login(password="password1")
 
     def test_user_change_different_user_password(self):
         u = User.objects.get(email="staffmember@example.com")

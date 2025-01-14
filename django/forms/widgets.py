@@ -9,9 +9,10 @@ from collections import defaultdict
 from graphlib import CycleError, TopologicalSorter
 from itertools import chain
 
-from django.forms.utils import to_current_timezone
+from django.forms.utils import flatatt, to_current_timezone
 from django.templatetags.static import static
 from django.utils import formats
+from django.utils.choices import normalize_choices
 from django.utils.dates import MONTHS
 from django.utils.formats import get_format
 from django.utils.html import format_html, html_safe
@@ -22,6 +23,7 @@ from django.utils.translation import gettext_lazy as _
 from .renderers import get_default_renderer
 
 __all__ = (
+    "Script",
     "Media",
     "MediaDefiningClass",
     "Widget",
@@ -29,6 +31,9 @@ __all__ = (
     "NumberInput",
     "EmailInput",
     "URLInput",
+    "ColorInput",
+    "SearchInput",
+    "TelInput",
     "PasswordInput",
     "HiddenInput",
     "MultipleHiddenInput",
@@ -55,6 +60,53 @@ MEDIA_TYPES = ("css", "js")
 
 class MediaOrderConflictWarning(RuntimeWarning):
     pass
+
+
+@html_safe
+class MediaAsset:
+    element_template = "{path}"
+
+    def __init__(self, path, **attributes):
+        self._path = path
+        self.attributes = attributes
+
+    def __eq__(self, other):
+        # Compare the path only, to ensure performant comparison in Media.merge.
+        return (self.__class__ is other.__class__ and self.path == other.path) or (
+            isinstance(other, str) and self._path == other
+        )
+
+    def __hash__(self):
+        # Hash the path only, to ensure performant comparison in Media.merge.
+        return hash(self._path)
+
+    def __str__(self):
+        return format_html(
+            self.element_template,
+            path=self.path,
+            attributes=flatatt(self.attributes),
+        )
+
+    def __repr__(self):
+        return f"{type(self).__qualname__}({self._path!r})"
+
+    @property
+    def path(self):
+        """
+        Ensure an absolute path.
+        Relative paths are resolved via the {% static %} template tag.
+        """
+        if self._path.startswith(("http://", "https://", "/")):
+            return self._path
+        return static(self._path)
+
+
+class Script(MediaAsset):
+    element_template = '<script src="{path}"{attributes}></script>'
+
+    def __init__(self, src, **attributes):
+        # Alter the signature to allow src to be passed as a keyword argument.
+        super().__init__(src, **attributes)
 
 
 @html_safe
@@ -100,9 +152,11 @@ class Media:
 
     def render_js(self):
         return [
-            path.__html__()
-            if hasattr(path, "__html__")
-            else format_html('<script src="{}"></script>', self.absolute_path(path))
+            (
+                path.__html__()
+                if hasattr(path, "__html__")
+                else format_html('<script src="{}"></script>', self.absolute_path(path))
+            )
             for path in self._js
         ]
 
@@ -112,12 +166,14 @@ class Media:
         media = sorted(self._css)
         return chain.from_iterable(
             [
-                path.__html__()
-                if hasattr(path, "__html__")
-                else format_html(
-                    '<link href="{}" media="{}" rel="stylesheet">',
-                    self.absolute_path(path),
-                    medium,
+                (
+                    path.__html__()
+                    if hasattr(path, "__html__")
+                    else format_html(
+                        '<link href="{}" media="{}" rel="stylesheet">',
+                        self.absolute_path(path),
+                        medium,
+                    )
                 )
                 for path in self._css[medium]
             ]
@@ -348,6 +404,21 @@ class URLInput(Input):
     template_name = "django/forms/widgets/url.html"
 
 
+class ColorInput(Input):
+    input_type = "color"
+    template_name = "django/forms/widgets/color.html"
+
+
+class SearchInput(Input):
+    input_type = "search"
+    template_name = "django/forms/widgets/search.html"
+
+
+class TelInput(Input):
+    input_type = "tel"
+    template_name = "django/forms/widgets/tel.html"
+
+
 class PasswordInput(Input):
     input_type = "password"
     template_name = "django/forms/widgets/password.html"
@@ -406,9 +477,27 @@ class MultipleHiddenInput(HiddenInput):
 
 
 class FileInput(Input):
+    allow_multiple_selected = False
     input_type = "file"
     needs_multipart_form = True
     template_name = "django/forms/widgets/file.html"
+
+    def __init__(self, attrs=None):
+        if (
+            attrs is not None
+            and not self.allow_multiple_selected
+            and attrs.get("multiple", False)
+        ):
+            raise ValueError(
+                "%s doesn't support uploading multiple files."
+                % self.__class__.__qualname__
+            )
+        if self.allow_multiple_selected:
+            if attrs is None:
+                attrs = {"multiple": True}
+            else:
+                attrs.setdefault("multiple", True)
+        super().__init__(attrs)
 
     def format_value(self, value):
         """File input never renders a value."""
@@ -416,7 +505,13 @@ class FileInput(Input):
 
     def value_from_datadict(self, data, files, name):
         "File widgets take data from FILES, not POST"
-        return files.get(name)
+        getter = files.get
+        if self.allow_multiple_selected:
+            try:
+                getter = files.getlist
+            except AttributeError:
+                pass
+        return getter(name)
 
     def value_omitted_from_data(self, data, files, name):
         return name not in files
@@ -433,6 +528,7 @@ class ClearableFileInput(FileInput):
     initial_text = _("Currently")
     input_text = _("Change")
     template_name = "django/forms/widgets/clearable_file_input.html"
+    checked = False
 
     def clear_checkbox_name(self, name):
         """
@@ -475,10 +571,12 @@ class ClearableFileInput(FileInput):
             }
         )
         context["widget"]["attrs"].setdefault("disabled", False)
+        context["widget"]["attrs"]["checked"] = self.checked
         return context
 
     def value_from_datadict(self, data, files, name):
         upload = super().value_from_datadict(data, files, name)
+        self.checked = self.clear_checkbox_name(name) in data
         if not self.is_required and CheckboxInput().value_from_datadict(
             data, files, self.clear_checkbox_name(name)
         ):
@@ -593,10 +691,7 @@ class ChoiceWidget(Widget):
 
     def __init__(self, attrs=None, choices=()):
         super().__init__(attrs)
-        # choices can be any iterable, but we may need to render this widget
-        # multiple times. Thus, collapse it into a list so it can be consumed
-        # more than once.
-        self.choices = list(choices)
+        self.choices = choices
 
     def __deepcopy__(self, memo):
         obj = copy.copy(self)
@@ -713,6 +808,14 @@ class ChoiceWidget(Widget):
         if not isinstance(value, (tuple, list)):
             value = [value]
         return [str(v) if v is not None else "" for v in value]
+
+    @property
+    def choices(self):
+        return self._choices
+
+    @choices.setter
+    def choices(self, value):
+        self._choices = normalize_choices(value)
 
 
 class Select(ChoiceWidget):
@@ -1161,6 +1264,8 @@ class SelectDateWidget(Widget):
                 # Return pseudo-ISO dates with zeros for any unselected values,
                 # e.g. '2017-0-23'.
                 return "%s-%s-%s" % (y or 0, m or 0, d or 0)
+            except OverflowError:
+                return "0-0-0"
             return date_value.strftime(input_format)
         return data.get(name)
 

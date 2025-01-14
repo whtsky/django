@@ -7,6 +7,7 @@ from django.contrib import admin
 from django.contrib.admin import helpers
 from django.contrib.admin.utils import (
     NestedObjects,
+    build_q_object_from_lookup_parameters,
     display_for_field,
     display_for_value,
     flatten,
@@ -16,6 +17,7 @@ from django.contrib.admin.utils import (
     lookup_field,
     quote,
 )
+from django.core.validators import EMPTY_VALUES
 from django.db import DEFAULT_DB_ALIAS, models
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils.formats import localize
@@ -135,6 +137,7 @@ class UtilsTests(SimpleTestCase):
             (simple_function, SIMPLE_FUNCTION),
             ("test_from_model", article.test_from_model()),
             ("non_field", INSTANCE_ATTRIBUTE),
+            ("site__domain", SITE_NAME),
         )
 
         mock_admin = MockModelAdmin()
@@ -148,42 +151,36 @@ class UtilsTests(SimpleTestCase):
 
             self.assertEqual(value, resolved_value)
 
-    def test_null_display_for_field(self):
-        """
-        Regression test for #12550: display_for_field should handle None
-        value.
-        """
-        display_value = display_for_field(None, models.CharField(), self.empty_value)
-        self.assertEqual(display_value, self.empty_value)
+    def test_empty_value_display_for_field(self):
+        tests = [
+            models.CharField(),
+            models.DateField(),
+            models.DecimalField(),
+            models.FloatField(),
+            models.URLField(),
+            models.JSONField(),
+            models.TimeField(),
+        ]
+        for model_field in tests:
+            for value in model_field.empty_values:
+                with self.subTest(model_field=model_field, empty_value=value):
+                    display_value = display_for_field(
+                        value, model_field, self.empty_value
+                    )
+                    self.assertEqual(display_value, self.empty_value)
 
-        display_value = display_for_field(
-            None, models.CharField(choices=((None, "test_none"),)), self.empty_value
-        )
+    def test_empty_value_display_choices(self):
+        model_field = models.CharField(choices=((None, "test_none"),))
+        display_value = display_for_field(None, model_field, self.empty_value)
         self.assertEqual(display_value, "test_none")
 
-        display_value = display_for_field(None, models.DateField(), self.empty_value)
-        self.assertEqual(display_value, self.empty_value)
-
-        display_value = display_for_field(None, models.TimeField(), self.empty_value)
-        self.assertEqual(display_value, self.empty_value)
-
-        display_value = display_for_field(
-            None, models.BooleanField(null=True), self.empty_value
-        )
+    def test_empty_value_display_booleanfield(self):
+        model_field = models.BooleanField(null=True)
+        display_value = display_for_field(None, model_field, self.empty_value)
         expected = (
-            '<img src="%sadmin/img/icon-unknown.svg" alt="None" />'
-            % settings.STATIC_URL
+            f'<img src="{settings.STATIC_URL}admin/img/icon-unknown.svg" alt="None" />'
         )
         self.assertHTMLEqual(display_value, expected)
-
-        display_value = display_for_field(None, models.DecimalField(), self.empty_value)
-        self.assertEqual(display_value, self.empty_value)
-
-        display_value = display_for_field(None, models.FloatField(), self.empty_value)
-        self.assertEqual(display_value, self.empty_value)
-
-        display_value = display_for_field(None, models.JSONField(), self.empty_value)
-        self.assertEqual(display_value, self.empty_value)
 
     def test_json_display_for_field(self):
         tests = [
@@ -199,6 +196,14 @@ class UtilsTests(SimpleTestCase):
                     display_for_field(value, models.JSONField(), self.empty_value),
                     display_value,
                 )
+
+    def test_url_display_for_field(self):
+        model_field = models.URLField()
+        display_value = display_for_field(
+            "http://example.com", model_field, self.empty_value
+        )
+        expected = '<a href="http://example.com">http://example.com</a>'
+        self.assertHTMLEqual(display_value, expected)
 
     def test_number_formats_display_for_field(self):
         display_value = display_for_field(
@@ -255,6 +260,12 @@ class UtilsTests(SimpleTestCase):
         self.assertEqual(display_for_value(True, ""), "True")
         self.assertEqual(display_for_value(False, ""), "False")
 
+    def test_list_display_for_value_empty(self):
+        for value in EMPTY_VALUES:
+            with self.subTest(empty_value=value):
+                display_value = display_for_value(value, self.empty_value)
+                self.assertEqual(display_value, self.empty_value)
+
     def test_label_for_field(self):
         """
         Tests for label_for_field
@@ -293,6 +304,17 @@ class UtilsTests(SimpleTestCase):
 
         self.assertEqual(label_for_field(lambda x: "nothing", Article), "--")
         self.assertEqual(label_for_field("site_id", Article), "Site id")
+        # The correct name and attr are returned when `__` is in the field name.
+        self.assertEqual(label_for_field("site__domain", Article), "Site  domain")
+        self.assertEqual(
+            label_for_field("site__domain", Article, return_attr=True),
+            ("Site  domain", Site._meta.get_field("domain")),
+        )
+
+    def test_label_for_field_failed_lookup(self):
+        msg = "Unable to lookup 'site__unknown' on Article"
+        with self.assertRaisesMessage(AttributeError, msg):
+            label_for_field("site__unknown", Article)
 
         class MockModelAdmin:
             @admin.display(description="not Really the Model")
@@ -324,7 +346,7 @@ class UtilsTests(SimpleTestCase):
         )
         msg = "Unable to lookup 'nonexistent' on Article or ArticleForm"
         with self.assertRaisesMessage(AttributeError, msg):
-            label_for_field("nonexistent", Article, form=ArticleForm()),
+            label_for_field("nonexistent", Article, form=ArticleForm())
 
     def test_label_for_property(self):
         class MockModelAdmin:
@@ -424,3 +446,17 @@ class UtilsTests(SimpleTestCase):
 
     def test_quote(self):
         self.assertEqual(quote("something\nor\nother"), "something_0Aor_0Aother")
+
+    def test_build_q_object_from_lookup_parameters(self):
+        parameters = {
+            "title__in": [["Article 1", "Article 2"]],
+            "hist__iexact": ["history"],
+            "site__pk": [1, 2],
+        }
+        q_obj = build_q_object_from_lookup_parameters(parameters)
+        self.assertEqual(
+            q_obj,
+            models.Q(title__in=["Article 1", "Article 2"])
+            & models.Q(hist__iexact="history")
+            & (models.Q(site__pk=1) | models.Q(site__pk=2)),
+        )

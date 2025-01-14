@@ -13,9 +13,8 @@ from django.db.migrations.state import (
     ProjectState,
     get_related_models_recursive,
 )
-from django.test import SimpleTestCase, ignore_warnings, override_settings
+from django.test import SimpleTestCase, override_settings
 from django.test.utils import isolate_apps
-from django.utils.deprecation import RemovedInDjango51Warning
 
 from .models import (
     FoodManager,
@@ -31,9 +30,6 @@ class StateTests(SimpleTestCase):
     Tests state construction, rendering and modification by operations.
     """
 
-    # RemovedInDjango51Warning, when deprecation ends, only remove
-    # Meta.index_together from inline models.
-    @ignore_warnings(category=RemovedInDjango51Warning)
     def test_create(self):
         """
         Tests making a ProjectState from an Apps
@@ -50,7 +46,6 @@ class StateTests(SimpleTestCase):
                 app_label = "migrations"
                 apps = new_apps
                 unique_together = ["name", "bio"]
-                index_together = ["bio", "age"]  # RemovedInDjango51Warning.
 
         class AuthorProxy(Author):
             class Meta:
@@ -142,7 +137,6 @@ class StateTests(SimpleTestCase):
             author_state.options,
             {
                 "unique_together": {("name", "bio")},
-                "index_together": {("bio", "age")},  # RemovedInDjango51Warning.
                 "indexes": [],
                 "constraints": [],
             },
@@ -1137,6 +1131,22 @@ class StateTests(SimpleTestCase):
         self.assertIsNone(order_field.related_model)
         self.assertIsInstance(order_field, models.PositiveSmallIntegerField)
 
+    def test_get_order_field_after_removed_order_with_respect_to_field(self):
+        new_apps = Apps()
+
+        class HistoricalRecord(models.Model):
+            _order = models.PositiveSmallIntegerField()
+
+            class Meta:
+                app_label = "migrations"
+                apps = new_apps
+
+        model_state = ModelState.from_model(HistoricalRecord)
+        model_state.options["order_with_respect_to"] = None
+        order_field = model_state.get_field("_order")
+        self.assertIsNone(order_field.related_model)
+        self.assertIsInstance(order_field, models.PositiveSmallIntegerField)
+
     def test_manager_refer_correct_model_version(self):
         """
         #24147 - Managers refer to the correct version of a
@@ -1195,6 +1205,28 @@ class StateTests(SimpleTestCase):
         ProjectState.from_apps(new_apps)
         choices_field = Author._meta.get_field("choice")
         self.assertEqual(list(choices_field.choices), choices)
+
+    def test_composite_pk_state(self):
+        new_apps = Apps(["migrations"])
+
+        class Foo(models.Model):
+            pk = models.CompositePrimaryKey("account_id", "id")
+            account_id = models.SmallIntegerField()
+            id = models.SmallIntegerField()
+
+            class Meta:
+                app_label = "migrations"
+                apps = new_apps
+
+        project_state = ProjectState.from_apps(new_apps)
+        model_state = project_state.models["migrations", "foo"]
+        self.assertEqual(len(model_state.options), 2)
+        self.assertEqual(model_state.options["constraints"], [])
+        self.assertEqual(model_state.options["indexes"], [])
+        self.assertEqual(len(model_state.fields), 3)
+        self.assertIn("pk", model_state.fields)
+        self.assertIn("account_id", model_state.fields)
+        self.assertIn("id", model_state.fields)
 
 
 class StateRelationsTests(SimpleTestCase):
@@ -1657,8 +1689,8 @@ class ModelStateTests(SimpleTestCase):
         field = models.ForeignKey(UnicodeModel, models.CASCADE)
         with self.assertRaisesMessage(
             ValueError,
-            'ModelState.fields cannot refer to a model class - "field.to" does. '
-            "Use a string reference instead.",
+            'Model fields in "ModelState.fields" cannot refer to a model class - '
+            '"app.Model.field.to" does. Use a string reference instead.',
         ):
             ModelState("app", "Model", [("field", field)])
 
@@ -1667,8 +1699,8 @@ class ModelStateTests(SimpleTestCase):
         field.remote_field.through = UnicodeModel
         with self.assertRaisesMessage(
             ValueError,
-            'ModelState.fields cannot refer to a model class - "field.through" does. '
-            "Use a string reference instead.",
+            'Model fields in "ModelState.fields" cannot refer to a model class - '
+            '"app.Model.field.through" does. Use a string reference instead.',
         ):
             ModelState("app", "Model", [("field", field)])
 
@@ -1862,8 +1894,11 @@ class ModelStateTests(SimpleTestCase):
         class Child2(Abstract):
             pass
 
+        abstract_state = ModelState.from_model(Abstract)
         child1_state = ModelState.from_model(Child1)
         child2_state = ModelState.from_model(Child2)
+        index_names = [index.name for index in abstract_state.options["indexes"]]
+        self.assertEqual(index_names, ["migrations__name_ae16a4_idx"])
         index_names = [index.name for index in child1_state.options["indexes"]]
         self.assertEqual(index_names, ["migrations__name_b0afd7_idx"])
         index_names = [index.name for index in child2_state.options["indexes"]]
@@ -1893,7 +1928,9 @@ class ModelStateTests(SimpleTestCase):
 
             class Meta:
                 constraints = [
-                    models.CheckConstraint(check=models.Q(size__gt=1), name="size_gt_1")
+                    models.CheckConstraint(
+                        condition=models.Q(size__gt=1), name="size_gt_1"
+                    )
                 ]
 
         state = ModelState.from_model(ModelWithConstraints)

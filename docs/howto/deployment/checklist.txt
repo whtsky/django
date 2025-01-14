@@ -36,6 +36,14 @@ Some of the checks described below can be automated using the :option:`check
 --deploy` option. Be sure to run it against your production settings file as
 described in the option's documentation.
 
+Switch away from ``manage.py runserver``
+========================================
+
+The :djadmin:`runserver` command is not designed for a production setting. Be
+sure to switch to a production-ready WSGI or ASGI server. For a few common
+options, see :doc:`WSGI servers </howto/deployment/wsgi/index>` or
+:doc:`ASGI servers </howto/deployment/asgi/index>`.
+
 Critical settings
 =================
 
@@ -52,19 +60,21 @@ Instead of hardcoding the secret key in your settings module, consider loading
 it from an environment variable::
 
     import os
-    SECRET_KEY = os.environ['SECRET_KEY']
+
+    SECRET_KEY = os.environ["SECRET_KEY"]
 
 or from a file::
 
-    with open('/etc/secret_key.txt') as f:
+    with open("/etc/secret_key.txt") as f:
         SECRET_KEY = f.read().strip()
 
 If rotating secret keys, you may use :setting:`SECRET_KEY_FALLBACKS`::
 
     import os
-    SECRET_KEY = os.environ['CURRENT_SECRET_KEY']
+
+    SECRET_KEY = os.environ["CURRENT_SECRET_KEY"]
     SECRET_KEY_FALLBACKS = [
-        os.environ['OLD_SECRET_KEY'],
+        os.environ["OLD_SECRET_KEY"],
     ]
 
 Ensure that old secret keys are removed from ``SECRET_KEY_FALLBACKS`` in a

@@ -1,7 +1,9 @@
 import datetime
 from decimal import Decimal
+from unittest import skipUnless
 
 from django.core.exceptions import FieldDoesNotExist, FieldError
+from django.db import connection
 from django.db.models import (
     BooleanField,
     Case,
@@ -15,6 +17,7 @@ from django.db.models import (
     FloatField,
     Func,
     IntegerField,
+    JSONField,
     Max,
     OuterRef,
     Q,
@@ -33,6 +36,7 @@ from django.db.models.functions import (
     Lower,
     Trim,
 )
+from django.db.models.sql.query import get_field_names_from_opts
 from django.test import TestCase, skipUnlessDBFeature
 from django.test.utils import register_lookup
 
@@ -42,6 +46,7 @@ from .models import (
     Company,
     DepartmentStore,
     Employee,
+    JsonModel,
     Publisher,
     Store,
     Ticket,
@@ -465,6 +470,16 @@ class NonAggregateAnnotationTestCase(TestCase):
                 )
             )
 
+    def test_values_wrong_annotation(self):
+        expected_message = (
+            "Cannot resolve keyword 'annotation_typo' into field. Choices are: %s"
+        )
+        article_fields = ", ".join(
+            ["annotation"] + sorted(get_field_names_from_opts(Book._meta))
+        )
+        with self.assertRaisesMessage(FieldError, expected_message % article_fields):
+            Book.objects.annotate(annotation=Value(1)).values_list("annotation_typo")
+
     def test_decimal_annotation(self):
         salary = Decimal(10) ** -Employee._meta.get_field("salary").decimal_places
         Employee.objects.create(
@@ -556,6 +571,16 @@ class NonAggregateAnnotationTestCase(TestCase):
         book = qs.annotate(other_isbn=F("isbn")).get(other_rating=4)
         self.assertEqual(book["other_rating"], 4)
         self.assertEqual(book["other_isbn"], "155860191")
+
+    def test_values_fields_annotations_order(self):
+        qs = Book.objects.annotate(other_rating=F("rating") - 1).values(
+            "other_rating", "rating"
+        )
+        book = qs.get(pk=self.b1.pk)
+        self.assertEqual(
+            list(book.items()),
+            [("other_rating", self.b1.rating - 1), ("rating", self.b1.rating)],
+        )
 
     def test_values_with_pk_annotation(self):
         # annotate references a field in values() with pk
@@ -1145,6 +1170,23 @@ class NonAggregateAnnotationTestCase(TestCase):
             with self.subTest(crafted_alias):
                 with self.assertRaisesMessage(ValueError, msg):
                     Book.objects.annotate(**{crafted_alias: Value(1)})
+
+    @skipUnless(connection.vendor == "postgresql", "PostgreSQL tests")
+    @skipUnlessDBFeature("supports_json_field")
+    def test_set_returning_functions(self):
+        class JSONBPathQuery(Func):
+            function = "jsonb_path_query"
+            output_field = JSONField()
+            set_returning = True
+
+        test_model = JsonModel.objects.create(
+            data={"key": [{"id": 1, "name": "test1"}, {"id": 2, "name": "test2"}]}, id=1
+        )
+        qs = JsonModel.objects.annotate(
+            table_element=JSONBPathQuery("data", Value("$.key[*]"))
+        ).filter(pk=test_model.pk)
+
+        self.assertEqual(qs.count(), len(qs))
 
 
 class AliasTests(TestCase):

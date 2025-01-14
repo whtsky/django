@@ -3,9 +3,6 @@ from django.db import migrations, models
 from ..fields import (
     ArrayField,
     BigIntegerRangeField,
-    CICharField,
-    CIEmailField,
-    CITextField,
     DateRangeField,
     DateTimeRangeField,
     DecimalRangeField,
@@ -290,23 +287,6 @@ class Migration(migrations.Migration):
             options=None,
             bases=None,
         ),
-        # RemovedInDjango51Warning.
-        migrations.CreateModel(
-            name="CITestModel",
-            fields=[
-                (
-                    "name",
-                    CICharField(primary_key=True, serialize=False, max_length=255),
-                ),
-                ("email", CIEmailField()),
-                ("description", CITextField()),
-                ("array_field", ArrayField(CITextField(), null=True)),
-            ],
-            options={
-                "required_db_vendor": "postgresql",
-            },
-            bases=None,
-        ),
         migrations.CreateModel(
             name="Line",
             fields=[
@@ -454,7 +434,7 @@ class Migration(migrations.Migration):
                         primary_key=True,
                     ),
                 ),
-                ("ints", IntegerRangeField(null=True, blank=True)),
+                ("ints", IntegerRangeField(null=True, blank=True, db_default=(5, 10))),
                 ("bigints", BigIntegerRangeField(null=True, blank=True)),
                 ("decimals", DecimalRangeField(null=True, blank=True)),
                 ("timestamps", DateTimeRangeField(null=True, blank=True)),

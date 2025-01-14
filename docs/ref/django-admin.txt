@@ -584,7 +584,7 @@ Updates the message files for all available languages.
 .. django-admin-option:: --extension EXTENSIONS, -e EXTENSIONS
 
 Specifies a list of file extensions to examine (default: ``html``, ``txt``,
-``py`` or ``js`` if :option:`--domain` is ``js``).
+``py`` or ``js`` if :option:`--domain` is ``djangojs``).
 
 Example usage:
 
@@ -677,6 +677,10 @@ is:
 
 Requires ``gettext`` 0.19 or newer.
 
+.. django-admin-option:: --no-obsolete
+
+Removes obsolete message strings from the ``.po`` files.
+
 .. django-admin-option:: --keep-pot
 
 Prevents deleting the temporary ``.pot`` files generated before creating the
@@ -738,12 +742,7 @@ Generate migration files without Django version and timestamp header.
 .. django-admin-option:: --check
 
 Makes ``makemigrations`` exit with a non-zero status when model changes without
-migrations are detected.
-
-.. versionchanged:: 4.2
-
-    In older versions, the missing migrations were also created when using the
-    ``--check`` option.
+migrations are detected. Implies ``--dry-run``.
 
 .. django-admin-option:: --scriptable
 
@@ -752,10 +751,11 @@ generated migration files to ``stdout``.
 
 .. django-admin-option:: --update
 
-.. versionadded:: 4.2
-
 Merges model changes into the latest migration and optimize the resulting
 operations.
+
+The updated migration will have a generated name. In order to preserve the
+previous name, set it using ``--name``.
 
 ``migrate``
 -----------
@@ -870,18 +870,18 @@ are reserved for the superuser (root).
 This server uses the WSGI application object specified by the
 :setting:`WSGI_APPLICATION` setting.
 
-DO NOT USE THIS SERVER IN A PRODUCTION SETTING. It has not gone through
-security audits or performance tests. (And that's how it's gonna stay. We're in
-the business of making web frameworks, not web servers, so improving this
-server to be able to handle a production environment is outside the scope of
-Django.)
+.. warning:: DO NOT USE THIS SERVER IN A PRODUCTION SETTING.
+
+    This lightweight development server has not gone through security audits or
+    performance tests, hence is unsuitable for production. Making this server
+    able to handle a production environment is outside the scope of Django.
 
 The development server automatically reloads Python code for each request, as
 needed. You don't need to restart the server for code changes to take effect.
 However, some actions like adding files don't trigger a restart, so you'll
 have to restart the server in these cases.
 
-If you're using Linux or MacOS and install both `pywatchman`_ and the
+If you're using Linux or MacOS and install both :pypi:`pywatchman` and the
 `Watchman`_ service, kernel signals will be used to autoreload the server
 (rather than polling file modification timestamps each second). This offers
 better performance on large projects, reduced response time after code changes,
@@ -903,7 +903,6 @@ more robust change detection, and a reduction in power usage. Django supports
     by setting the :envvar:`DJANGO_WATCHMAN_TIMEOUT` environment variable.
 
 .. _Watchman: https://facebook.github.io/watchman/
-.. _pywatchman: https://pypi.org/project/pywatchman/
 .. _watchman documentation: https://facebook.github.io/watchman/docs/config#ignore_dirs
 
 When you start the server, and each time you change Python code while the
@@ -947,6 +946,20 @@ multithreaded by default.
 
 Uses IPv6 for the development server. This changes the default IP address from
 ``127.0.0.1`` to ``::1``.
+
+.. envvar:: HIDE_PRODUCTION_WARNING
+
+.. versionadded:: 5.2
+
+By default, a warning is printed to the console that ``runserver`` is not
+suitable for production:
+
+.. code-block:: text
+
+    WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+    For more information on production servers see: https://docs.djangoproject.com/en/|version|/howto/deployment/
+
+Set this environment variable to ``"true"`` to hide this warning.
 
 Examples of using different ports and addresses
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1013,6 +1026,13 @@ By default, the development server doesn't serve any static files for your site
 you want to configure Django to serve static media, read
 :doc:`/howto/static-files/index`.
 
+Serving with ASGI in development
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Django's ``runserver`` command provides a WSGI server. In order to run under
+ASGI you will need to use an :doc:`ASGI server </howto/deployment/asgi/index>`.
+The Django Daphne project provides :ref:`daphne-runserver` that you can use.
+
 ``sendtestemail``
 -----------------
 
@@ -1045,6 +1065,19 @@ Mails the email addresses specified in :setting:`ADMINS` using
 
 Starts the Python interactive interpreter.
 
+All models from installed apps are automatically imported into the shell
+environment. Models from apps listed earlier in :setting:`INSTALLED_APPS` take
+precedence. For a ``--verbosity`` of 2 or higher, the automatically imported
+objects will be listed. To disable automatic importing entirely, use the
+``--no-imports`` flag.
+
+See the guide on :ref:`customizing this behaviour
+<customizing-shell-auto-imports>` to add or remove automatic imports.
+
+.. versionchanged:: 5.2
+
+    Automatic models import was added.
+
 .. django-admin-option:: --interface {ipython,bpython,python}, -i {ipython,bpython,python}
 
 Specifies the shell to use. By default, Django will use IPython_ or bpython_ if
@@ -1072,7 +1105,7 @@ Python interpreter, use ``python`` as the interface name, like so:
 .. _IPython: https://ipython.org/
 .. _bpython: https://bpython-interpreter.org/
 
-.. django-admin-option:: --nostartup
+.. django-admin-option:: --no-startup
 
 Disables reading the startup script for the "plain" Python interpreter. By
 default, the script pointed to by the :envvar:`PYTHONSTARTUP` environment
@@ -1471,12 +1504,12 @@ override this by passing the desired number of processes, e.g.
 variable.
 
 Django distributes test cases — :class:`unittest.TestCase` subclasses — to
-subprocesses. If there are fewer test cases than configured processes, Django
-will reduce the number of processes accordingly.
+subprocesses. If there are fewer test case classes than configured processes,
+Django will reduce the number of processes accordingly.
 
-Each process gets its own database. You must ensure that different test cases
-don't access the same resources. For instance, test cases that touch the
-filesystem should create a temporary directory for their own use.
+Each process gets its own database. You must ensure that different test case
+classes don't access the same resources. For instance, test case classes that
+touch the filesystem should create a temporary directory for their own use.
 
 .. note::
 
@@ -1545,6 +1578,14 @@ tests, which allows it to print a traceback if the interpreter crashes. Pass
 .. django-admin-option:: --timing
 
 Outputs timings, including database setup and total run time.
+
+.. django-admin-option:: --durations N
+
+Shows the N slowest test cases (N=0 for all).
+
+.. admonition:: Python 3.12 and later
+
+    This feature is only available for Python 3.12 and later.
 
 ``testserver``
 --------------
@@ -1750,18 +1791,6 @@ documentation.
 
 Can be run as a cron job or directly to clean out expired sessions.
 
-``django.contrib.sitemaps``
----------------------------
-
-``ping_google``
-~~~~~~~~~~~~~~~
-
-This command is only available if the :doc:`Sitemaps framework
-</ref/contrib/sitemaps>` (``django.contrib.sitemaps``) is installed.
-
-Please refer to its :djadmin:`description <ping_google>` in the Sitemaps
-documentation.
-
 ``django.contrib.staticfiles``
 ------------------------------
 
@@ -1793,9 +1822,9 @@ allows for the following options by default:
 
 .. django-admin-option:: --pythonpath PYTHONPATH
 
-Adds the given filesystem path to the Python `import search path`_. If this
-isn't provided, ``django-admin`` will use the :envvar:`PYTHONPATH` environment
-variable.
+Adds the given filesystem path to the Python :py:data:`sys.path` module
+attribute. If this isn't provided, ``django-admin`` will use the
+:envvar:`PYTHONPATH` environment variable.
 
 This option is unnecessary in ``manage.py``, because it takes care of setting
 the Python path for you.
@@ -1805,8 +1834,6 @@ Example usage:
 .. console::
 
     django-admin migrate --pythonpath='/home/djangoprojects/myproject'
-
-.. _import search path: https://diveinto.org/python3/your-first-python-program.html#importsearchpath
 
 .. django-admin-option:: --settings SETTINGS
 
@@ -1913,14 +1940,14 @@ Under Windows, the legacy ``cmd.exe`` native console doesn't support ANSI
 escape sequences so by default there is no color output. In this case either of
 two third-party libraries are needed:
 
-* Install colorama_, a Python package that translates ANSI color codes into
-  Windows API calls. Django commands will detect its presence and will make use
-  of its services to color output just like on Unix-based platforms.
+* Install :pypi:`colorama`, a Python package that translates ANSI color codes
+  into Windows API calls. Django commands will detect its presence and will
+  make use of its services to color output just like on Unix-based platforms.
   ``colorama`` can be installed via pip:
 
   .. code-block:: doscon
 
-    ...\> py -m pip install colorama
+    ...\> py -m pip install "colorama >= 0.4.6"
 
 * Install `ANSICON`_, a third-party tool that allows ``cmd.exe`` to process
   ANSI color codes. Django commands will detect its presence and will make use
@@ -1934,7 +1961,6 @@ installation of ``ANSICON`` by setting the appropriate environmental variable,
 .. _`Windows Terminal`: https://www.microsoft.com/en-us/p/windows-terminal-preview/9n0dx20hk701
 .. _`VS Code`: https://code.visualstudio.com
 .. _ANSICON: http://adoxa.altervista.org/ansicon/
-.. _colorama: https://pypi.org/project/colorama/
 
 Custom colors
 ~~~~~~~~~~~~~
@@ -2075,7 +2101,7 @@ Running management commands from your code
 
 .. function:: django.core.management.call_command(name, *args, **options)
 
-To call a management command from code use ``call_command``.
+To call a management command from code use ``call_command()``.
 
 ``name``
   the name of the command to call or a command object. Passing the name is
@@ -2097,9 +2123,9 @@ Examples::
       from django.core import management
       from django.core.management.commands import loaddata
 
-      management.call_command('flush', verbosity=0, interactive=False)
-      management.call_command('loaddata', 'test_data', verbosity=0)
-      management.call_command(loaddata.Command(), 'test_data', verbosity=0)
+      management.call_command("flush", verbosity=0, interactive=False)
+      management.call_command("loaddata", "test_data", verbosity=0)
+      management.call_command(loaddata.Command(), "test_data", verbosity=0)
 
 Note that command options that take no arguments are passed as keywords
 with ``True`` or ``False``, as you can see with the ``interactive`` option above.
@@ -2107,14 +2133,14 @@ with ``True`` or ``False``, as you can see with the ``interactive`` option above
 Named arguments can be passed by using either one of the following syntaxes::
 
       # Similar to the command line
-      management.call_command('dumpdata', '--natural-foreign')
+      management.call_command("dumpdata", "--natural-foreign")
 
       # Named argument similar to the command line minus the initial dashes and
       # with internal dashes replaced by underscores
-      management.call_command('dumpdata', natural_foreign=True)
+      management.call_command("dumpdata", natural_foreign=True)
 
       # `use_natural_foreign_keys` is the option destination variable
-      management.call_command('dumpdata', use_natural_foreign_keys=True)
+      management.call_command("dumpdata", use_natural_foreign_keys=True)
 
 Some command options have different names when using ``call_command()`` instead
 of ``django-admin`` or ``manage.py``. For example, ``django-admin
@@ -2125,7 +2151,7 @@ passed to ``parser.add_argument()``.
 
 Command options which take multiple options are passed a list::
 
-      management.call_command('dumpdata', exclude=['contenttypes', 'auth'])
+      management.call_command("dumpdata", exclude=["contenttypes", "auth"])
 
 The return value of the ``call_command()`` function is the same as the return
 value of the ``handle()`` method of the command.
@@ -2136,5 +2162,5 @@ Output redirection
 Note that you can redirect standard output and error streams as all commands
 support the ``stdout`` and ``stderr`` options. For example, you could write::
 
-    with open('/path/to/command_output', 'w') as f:
-        management.call_command('dumpdata', stdout=f)
+    with open("/path/to/command_output", "w") as f:
+        management.call_command("dumpdata", stdout=f)

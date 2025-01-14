@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from unittest import mock, skipUnless
 
 from django.conf.global_settings import PASSWORD_HASHERS
@@ -11,15 +12,15 @@ from django.contrib.auth.hashers import (
     PBKDF2PasswordHasher,
     PBKDF2SHA1PasswordHasher,
     ScryptPasswordHasher,
+    acheck_password,
     check_password,
     get_hasher,
     identify_hasher,
     is_password_usable,
     make_password,
 )
-from django.test import SimpleTestCase, ignore_warnings
+from django.test import SimpleTestCase
 from django.test.utils import override_settings
-from django.utils.deprecation import RemovedInDjango51Warning
 
 try:
     import bcrypt
@@ -59,6 +60,15 @@ class TestUtilsHashPass(SimpleTestCase):
         self.assertTrue(check_password("", blank_encoded))
         self.assertFalse(check_password(" ", blank_encoded))
 
+    async def test_acheck_password(self):
+        encoded = make_password("lètmein")
+        self.assertIs(await acheck_password("lètmein", encoded), True)
+        self.assertIs(await acheck_password("lètmeinz", encoded), False)
+        # Blank passwords.
+        blank_encoded = make_password("")
+        self.assertIs(await acheck_password("", blank_encoded), True)
+        self.assertIs(await acheck_password(" ", blank_encoded), False)
+
     def test_bytes(self):
         encoded = make_password(b"bytes_password")
         self.assertTrue(encoded.startswith("pbkdf2_sha256$"))
@@ -74,7 +84,8 @@ class TestUtilsHashPass(SimpleTestCase):
         encoded = make_password("lètmein", "seasalt", "pbkdf2_sha256")
         self.assertEqual(
             encoded,
-            "pbkdf2_sha256$720000$seasalt$eDupbcisD1UuIiou3hMuMu8oe/XwnpDw45r6AA5iv0E=",
+            "pbkdf2_sha256$1000000$"
+            "seasalt$r1uLUxoxpP2Ued/qxvmje7UH9PUJBkRrvf9gGPL7Cps=",
         )
         self.assertTrue(is_password_usable(encoded))
         self.assertTrue(check_password("lètmein", encoded))
@@ -92,40 +103,6 @@ class TestUtilsHashPass(SimpleTestCase):
         encoded_strong_salt = make_password("lètmein", hasher.salt(), "pbkdf2_sha256")
         self.assertIs(hasher.must_update(encoded_weak_salt), True)
         self.assertIs(hasher.must_update(encoded_strong_salt), False)
-
-    @ignore_warnings(category=RemovedInDjango51Warning)
-    @override_settings(
-        PASSWORD_HASHERS=["django.contrib.auth.hashers.SHA1PasswordHasher"]
-    )
-    def test_sha1(self):
-        encoded = make_password("lètmein", "seasalt", "sha1")
-        self.assertEqual(
-            encoded, "sha1$seasalt$cff36ea83f5706ce9aa7454e63e431fc726b2dc8"
-        )
-        self.assertTrue(is_password_usable(encoded))
-        self.assertTrue(check_password("lètmein", encoded))
-        self.assertFalse(check_password("lètmeinz", encoded))
-        self.assertEqual(identify_hasher(encoded).algorithm, "sha1")
-        # Blank passwords
-        blank_encoded = make_password("", "seasalt", "sha1")
-        self.assertTrue(blank_encoded.startswith("sha1$"))
-        self.assertTrue(is_password_usable(blank_encoded))
-        self.assertTrue(check_password("", blank_encoded))
-        self.assertFalse(check_password(" ", blank_encoded))
-        # Salt entropy check.
-        hasher = get_hasher("sha1")
-        encoded_weak_salt = make_password("lètmein", "iodizedsalt", "sha1")
-        encoded_strong_salt = make_password("lètmein", hasher.salt(), "sha1")
-        self.assertIs(hasher.must_update(encoded_weak_salt), True)
-        self.assertIs(hasher.must_update(encoded_strong_salt), False)
-
-    @override_settings(
-        PASSWORD_HASHERS=["django.contrib.auth.hashers.SHA1PasswordHasher"]
-    )
-    def test_sha1_deprecation_warning(self):
-        msg = "django.contrib.auth.hashers.SHA1PasswordHasher is deprecated."
-        with self.assertRaisesMessage(RemovedInDjango51Warning, msg):
-            get_hasher("sha1")
 
     @override_settings(
         PASSWORD_HASHERS=["django.contrib.auth.hashers.MD5PasswordHasher"]
@@ -149,85 +126,6 @@ class TestUtilsHashPass(SimpleTestCase):
         encoded_strong_salt = make_password("lètmein", hasher.salt(), "md5")
         self.assertIs(hasher.must_update(encoded_weak_salt), True)
         self.assertIs(hasher.must_update(encoded_strong_salt), False)
-
-    @ignore_warnings(category=RemovedInDjango51Warning)
-    @override_settings(
-        PASSWORD_HASHERS=["django.contrib.auth.hashers.UnsaltedMD5PasswordHasher"]
-    )
-    def test_unsalted_md5(self):
-        encoded = make_password("lètmein", "", "unsalted_md5")
-        self.assertEqual(encoded, "88a434c88cca4e900f7874cd98123f43")
-        self.assertTrue(is_password_usable(encoded))
-        self.assertTrue(check_password("lètmein", encoded))
-        self.assertFalse(check_password("lètmeinz", encoded))
-        self.assertEqual(identify_hasher(encoded).algorithm, "unsalted_md5")
-        # Alternate unsalted syntax
-        alt_encoded = "md5$$%s" % encoded
-        self.assertTrue(is_password_usable(alt_encoded))
-        self.assertTrue(check_password("lètmein", alt_encoded))
-        self.assertFalse(check_password("lètmeinz", alt_encoded))
-        # Blank passwords
-        blank_encoded = make_password("", "", "unsalted_md5")
-        self.assertTrue(is_password_usable(blank_encoded))
-        self.assertTrue(check_password("", blank_encoded))
-        self.assertFalse(check_password(" ", blank_encoded))
-
-    @ignore_warnings(category=RemovedInDjango51Warning)
-    @override_settings(
-        PASSWORD_HASHERS=["django.contrib.auth.hashers.UnsaltedMD5PasswordHasher"]
-    )
-    def test_unsalted_md5_encode_invalid_salt(self):
-        hasher = get_hasher("unsalted_md5")
-        msg = "salt must be empty."
-        with self.assertRaisesMessage(ValueError, msg):
-            hasher.encode("password", salt="salt")
-
-    @override_settings(
-        PASSWORD_HASHERS=["django.contrib.auth.hashers.UnsaltedMD5PasswordHasher"]
-    )
-    def test_unsalted_md5_deprecation_warning(self):
-        msg = "django.contrib.auth.hashers.UnsaltedMD5PasswordHasher is deprecated."
-        with self.assertRaisesMessage(RemovedInDjango51Warning, msg):
-            get_hasher("unsalted_md5")
-
-    @ignore_warnings(category=RemovedInDjango51Warning)
-    @override_settings(
-        PASSWORD_HASHERS=["django.contrib.auth.hashers.UnsaltedSHA1PasswordHasher"]
-    )
-    def test_unsalted_sha1(self):
-        encoded = make_password("lètmein", "", "unsalted_sha1")
-        self.assertEqual(encoded, "sha1$$6d138ca3ae545631b3abd71a4f076ce759c5700b")
-        self.assertTrue(is_password_usable(encoded))
-        self.assertTrue(check_password("lètmein", encoded))
-        self.assertFalse(check_password("lètmeinz", encoded))
-        self.assertEqual(identify_hasher(encoded).algorithm, "unsalted_sha1")
-        # Raw SHA1 isn't acceptable
-        alt_encoded = encoded[6:]
-        self.assertFalse(check_password("lètmein", alt_encoded))
-        # Blank passwords
-        blank_encoded = make_password("", "", "unsalted_sha1")
-        self.assertTrue(blank_encoded.startswith("sha1$"))
-        self.assertTrue(is_password_usable(blank_encoded))
-        self.assertTrue(check_password("", blank_encoded))
-        self.assertFalse(check_password(" ", blank_encoded))
-
-    @ignore_warnings(category=RemovedInDjango51Warning)
-    @override_settings(
-        PASSWORD_HASHERS=["django.contrib.auth.hashers.UnsaltedSHA1PasswordHasher"]
-    )
-    def test_unsalted_sha1_encode_invalid_salt(self):
-        hasher = get_hasher("unsalted_sha1")
-        msg = "salt must be empty."
-        with self.assertRaisesMessage(ValueError, msg):
-            hasher.encode("password", salt="salt")
-
-    @override_settings(
-        PASSWORD_HASHERS=["django.contrib.auth.hashers.UnsaltedSHA1PasswordHasher"]
-    )
-    def test_unsalted_sha1_deprecation_warning(self):
-        msg = "django.contrib.auth.hashers.UnsaltedSHA1PasswordHasher is deprecated."
-        with self.assertRaisesMessage(RemovedInDjango51Warning, msg):
-            get_hasher("unsalted_sha1")
 
     @skipUnless(bcrypt, "bcrypt not installed")
     def test_bcrypt_sha256(self):
@@ -317,8 +215,9 @@ class TestUtilsHashPass(SimpleTestCase):
         with mock.patch.object(hasher, "rounds", 4):
             encoded = make_password("letmein", hasher="bcrypt")
 
-        with mock.patch.object(hasher, "rounds", 6), mock.patch.object(
-            hasher, "encode", side_effect=hasher.encode
+        with (
+            mock.patch.object(hasher, "rounds", 6),
+            mock.patch.object(hasher, "encode", side_effect=hasher.encode),
         ):
             hasher.harden_runtime("wrong_password", encoded)
 
@@ -345,7 +244,7 @@ class TestUtilsHashPass(SimpleTestCase):
         self.assertFalse(check_password("", encoded))
         self.assertFalse(check_password("lètmein", encoded))
         self.assertFalse(check_password("lètmeinz", encoded))
-        with self.assertRaisesMessage(ValueError, "Unknown password hashing algorith"):
+        with self.assertRaisesMessage(ValueError, "Unknown password hashing algorithm"):
             identify_hasher(encoded)
         # Assert that the unusable passwords actually contain a random part.
         # This might fail one day due to a hash collision.
@@ -379,8 +278,8 @@ class TestUtilsHashPass(SimpleTestCase):
         encoded = hasher.encode("lètmein", "seasalt2")
         self.assertEqual(
             encoded,
-            "pbkdf2_sha256$720000$"
-            "seasalt2$e8hbsPnTo9qWhT3xYfKWoRth0h0J3360yb/tipPhPtY=",
+            "pbkdf2_sha256$1000000$"
+            "seasalt2$egbhFghgsJVDo5Tpg/k9ZnfbySKQ1UQnBYXhR97a7sk=",
         )
         self.assertTrue(hasher.verify("lètmein", encoded))
 
@@ -388,7 +287,7 @@ class TestUtilsHashPass(SimpleTestCase):
         hasher = PBKDF2SHA1PasswordHasher()
         encoded = hasher.encode("lètmein", "seasalt2")
         self.assertEqual(
-            encoded, "pbkdf2_sha1$720000$seasalt2$2DDbzziqCtfldrRSNAaF8oA9OMw="
+            encoded, "pbkdf2_sha1$1000000$seasalt2$3R9hvSAiAy5ARspAFy5GJ/2rjXo="
         )
         self.assertTrue(hasher.verify("lètmein", encoded))
 
@@ -492,8 +391,9 @@ class TestUtilsHashPass(SimpleTestCase):
         with mock.patch.object(hasher, "iterations", 1):
             encoded = make_password("letmein")
 
-        with mock.patch.object(hasher, "iterations", 6), mock.patch.object(
-            hasher, "encode", side_effect=hasher.encode
+        with (
+            mock.patch.object(hasher, "iterations", 6),
+            mock.patch.object(hasher, "encode", side_effect=hasher.encode),
         ):
             hasher.harden_runtime("wrong_password", encoded)
 
@@ -541,8 +441,9 @@ class TestUtilsHashPass(SimpleTestCase):
         hasher = get_hasher("default")
         encoded = make_password("letmein")
 
-        with mock.patch.object(hasher, "harden_runtime"), mock.patch.object(
-            hasher, "must_update", return_value=True
+        with (
+            mock.patch.object(hasher, "harden_runtime"),
+            mock.patch.object(hasher, "must_update", return_value=True),
         ):
             # Correct password supplied, no hardening needed
             check_password("letmein", encoded)
@@ -551,6 +452,58 @@ class TestUtilsHashPass(SimpleTestCase):
             # Wrong password supplied, hardening needed
             check_password("wrong_password", encoded)
             self.assertEqual(hasher.harden_runtime.call_count, 1)
+
+    @contextmanager
+    def assertMakePasswordCalled(self, password, encoded, hasher_side_effect):
+        hasher = get_hasher("default")
+        with (
+            mock.patch(
+                "django.contrib.auth.hashers.identify_hasher",
+                side_effect=hasher_side_effect,
+            ) as mock_identify_hasher,
+            mock.patch(
+                "django.contrib.auth.hashers.make_password"
+            ) as mock_make_password,
+            mock.patch(
+                "django.contrib.auth.hashers.get_random_string",
+                side_effect=lambda size: "x" * size,
+            ),
+            mock.patch.object(hasher, "verify"),
+        ):
+            # Ensure make_password is called to standardize timing.
+            yield
+            self.assertEqual(hasher.verify.call_count, 0)
+            self.assertEqual(mock_identify_hasher.mock_calls, [mock.call(encoded)])
+            self.assertEqual(
+                mock_make_password.mock_calls,
+                [mock.call("x" * UNUSABLE_PASSWORD_SUFFIX_LENGTH)],
+            )
+
+    def test_check_password_calls_make_password_to_fake_runtime(self):
+        cases = [
+            (None, None, None),  # no plain text password provided
+            ("foo", make_password(password=None), None),  # unusable encoded
+            ("letmein", make_password(password="letmein"), ValueError),  # valid encoded
+        ]
+        for password, encoded, hasher_side_effect in cases:
+            with (
+                self.subTest(encoded=encoded),
+                self.assertMakePasswordCalled(password, encoded, hasher_side_effect),
+            ):
+                check_password(password, encoded)
+
+    async def test_acheck_password_calls_make_password_to_fake_runtime(self):
+        cases = [
+            (None, None, None),  # no plain text password provided
+            ("foo", make_password(password=None), None),  # unusable encoded
+            ("letmein", make_password(password="letmein"), ValueError),  # valid encoded
+        ]
+        for password, encoded, hasher_side_effect in cases:
+            with (
+                self.subTest(encoded=encoded),
+                self.assertMakePasswordCalled(password, encoded, hasher_side_effect),
+            ):
+                await acheck_password(password, encoded)
 
     def test_encode_invalid_salt(self):
         hasher_classes = [
@@ -751,8 +704,8 @@ class TestUtilsHashPassScrypt(SimpleTestCase):
         encoded = make_password("lètmein", "seasalt", "scrypt")
         self.assertEqual(
             encoded,
-            "scrypt$16384$seasalt$8$1$Qj3+9PPyRjSJIebHnG81TMjsqtaIGxNQG/aEB/NY"
-            "afTJ7tibgfYz71m0ldQESkXFRkdVCBhhY8mx7rQwite/Pw==",
+            "scrypt$16384$seasalt$8$5$ECMIUp+LMxMSK8xB/IVyba+KYGTI7FTnet025q/1f"
+            "/vBAVnnP3hdYqJuRi+mJn6ji6ze3Fbb7JEFPKGpuEf5vw==",
         )
         self.assertIs(is_password_usable(encoded), True)
         self.assertIs(check_password("lètmein", encoded), True)

@@ -8,9 +8,12 @@ from django.contrib.gis.gdal import (
     OGRGeomType,
     SpatialReference,
 )
+from django.contrib.gis.gdal.geometries import CircularString, CurvePolygon
+from django.contrib.gis.geos import GEOSException
 from django.template import Context
 from django.template.engine import Engine
 from django.test import SimpleTestCase
+from django.utils.deprecation import RemovedInDjango60Warning
 
 from ..test_data import TestDataMixin
 
@@ -35,7 +38,7 @@ class OGRGeomTest(SimpleTestCase, TestDataMixin):
         with self.assertRaises(GDALException):
             OGRGeomType("fooD")
         with self.assertRaises(GDALException):
-            OGRGeomType(9)
+            OGRGeomType(4001)
 
         # Equivalence can take strings, ints, and other OGRGeomTypes
         self.assertEqual(OGRGeomType(1), OGRGeomType(1))
@@ -57,6 +60,9 @@ class OGRGeomTest(SimpleTestCase, TestDataMixin):
         gt = OGRGeomType("Geometry")
         self.assertEqual(0, gt.num)
         self.assertEqual("Unknown", gt.name)
+
+    def test_geom_type_repr(self):
+        self.assertEqual(repr(OGRGeomType("point")), "<OGRGeomType: Point>")
 
     def test_geomtype_25d(self):
         "Testing OGRGeomType object with 25D types."
@@ -632,3 +638,438 @@ class OGRGeomTest(SimpleTestCase, TestDataMixin):
     def test_empty_point_to_geos(self):
         p = OGRGeometry("POINT EMPTY", srs=4326)
         self.assertEqual(p.geos.ewkt, p.ewkt)
+
+    def test_geometry_types(self):
+        tests = [
+            ("Point", 1, True),
+            ("LineString", 2, True),
+            ("Polygon", 3, True),
+            ("MultiPoint", 4, True),
+            ("Multilinestring", 5, True),
+            ("MultiPolygon", 6, True),
+            ("GeometryCollection", 7, True),
+            ("CircularString", 8, True),
+            ("CompoundCurve", 9, True),
+            ("CurvePolygon", 10, True),
+            ("MultiCurve", 11, True),
+            ("MultiSurface", 12, True),
+            # 13 (Curve) and 14 (Surface) are abstract types.
+            ("PolyhedralSurface", 15, False),
+            ("TIN", 16, False),
+            ("Triangle", 17, False),
+            ("Linearring", 2, True),
+            # Types 1 - 7 with Z dimension have 2.5D enums.
+            ("Point Z", -2147483647, True),  # 1001
+            ("LineString Z", -2147483646, True),  # 1002
+            ("Polygon Z", -2147483645, True),  # 1003
+            ("MultiPoint Z", -2147483644, True),  # 1004
+            ("Multilinestring Z", -2147483643, True),  # 1005
+            ("MultiPolygon Z", -2147483642, True),  # 1006
+            ("GeometryCollection Z", -2147483641, True),  # 1007
+            ("CircularString Z", 1008, True),
+            ("CompoundCurve Z", 1009, True),
+            ("CurvePolygon Z", 1010, True),
+            ("MultiCurve Z", 1011, True),
+            ("MultiSurface Z", 1012, True),
+            ("PolyhedralSurface Z", 1015, False),
+            ("TIN Z", 1016, False),
+            ("Triangle Z", 1017, False),
+            ("Point M", 2001, True),
+            ("LineString M", 2002, True),
+            ("Polygon M", 2003, True),
+            ("MultiPoint M", 2004, True),
+            ("MultiLineString M", 2005, True),
+            ("MultiPolygon M", 2006, True),
+            ("GeometryCollection M", 2007, True),
+            ("CircularString M", 2008, True),
+            ("CompoundCurve M", 2009, True),
+            ("CurvePolygon M", 2010, True),
+            ("MultiCurve M", 2011, True),
+            ("MultiSurface M", 2012, True),
+            ("PolyhedralSurface M", 2015, False),
+            ("TIN M", 2016, False),
+            ("Triangle M", 2017, False),
+            ("Point ZM", 3001, True),
+            ("LineString ZM", 3002, True),
+            ("Polygon ZM", 3003, True),
+            ("MultiPoint ZM", 3004, True),
+            ("MultiLineString ZM", 3005, True),
+            ("MultiPolygon ZM", 3006, True),
+            ("GeometryCollection ZM", 3007, True),
+            ("CircularString ZM", 3008, True),
+            ("CompoundCurve ZM", 3009, True),
+            ("CurvePolygon ZM", 3010, True),
+            ("MultiCurve ZM", 3011, True),
+            ("MultiSurface ZM", 3012, True),
+            ("PolyhedralSurface ZM", 3015, False),
+            ("TIN ZM", 3016, False),
+            ("Triangle ZM", 3017, False),
+        ]
+
+        for test in tests:
+            geom_type, num, supported = test
+            with self.subTest(geom_type=geom_type, num=num, supported=supported):
+                if supported:
+                    g = OGRGeometry(f"{geom_type} EMPTY")
+                    self.assertEqual(g.geom_type.num, num)
+                else:
+                    type_ = geom_type.replace(" ", "")
+                    msg = f"Unsupported geometry type: {type_}"
+                    with self.assertRaisesMessage(TypeError, msg):
+                        OGRGeometry(f"{geom_type} EMPTY")
+
+    def test_is_3d_and_set_3d(self):
+        geom = OGRGeometry("POINT (1 2)")
+        self.assertIs(geom.is_3d, False)
+        geom.set_3d(True)
+        self.assertIs(geom.is_3d, True)
+        self.assertEqual(geom.wkt, "POINT (1 2 0)")
+        geom.set_3d(False)
+        self.assertIs(geom.is_3d, False)
+        self.assertEqual(geom.wkt, "POINT (1 2)")
+        msg = "Input to 'set_3d' must be a boolean, got 'None'"
+        with self.assertRaisesMessage(ValueError, msg):
+            geom.set_3d(None)
+
+    def test_wkt_and_wkb_output(self):
+        tests = [
+            # 2D
+            ("POINT (1 2)", "0101000000000000000000f03f0000000000000040"),
+            (
+                "LINESTRING (30 10,10 30)",
+                "0102000000020000000000000000003e400000000000002"
+                "44000000000000024400000000000003e40",
+            ),
+            (
+                "POLYGON ((30 10,40 40,20 40,30 10))",
+                "010300000001000000040000000000000000003e400000000000002440000000000000"
+                "44400000000000004440000000000000344000000000000044400000000000003e4000"
+                "00000000002440",
+            ),
+            (
+                "MULTIPOINT (10 40,40 30)",
+                "0104000000020000000101000000000000000000244000000000000044400101000000"
+                "00000000000044400000000000003e40",
+            ),
+            (
+                "MULTILINESTRING ((10 10,20 20),(40 40,30 30,40 20))",
+                "0105000000020000000102000000020000000000000000002440000000000000244000"
+                "0000000000344000000000000034400102000000030000000000000000004440000000"
+                "00000044400000000000003e400000000000003e400000000000004440000000000000"
+                "3440",
+            ),
+            (
+                "MULTIPOLYGON (((30 20,45 40,10 40,30 20)),((15 5,40 10,10 20,15 5)))",
+                "010600000002000000010300000001000000040000000000000000003e400000000000"
+                "0034400000000000804640000000000000444000000000000024400000000000004440"
+                "0000000000003e40000000000000344001030000000100000004000000000000000000"
+                "2e40000000000000144000000000000044400000000000002440000000000000244000"
+                "000000000034400000000000002e400000000000001440",
+            ),
+            (
+                "GEOMETRYCOLLECTION (POINT (40 10))",
+                "010700000001000000010100000000000000000044400000000000002440",
+            ),
+            # 3D
+            (
+                "POINT (1 2 3)",
+                "0101000080000000000000f03f00000000000000400000000000000840",
+            ),
+            (
+                "LINESTRING (30 10 3,10 30 3)",
+                "0102000080020000000000000000003e40000000000000244000000000000008400000"
+                "0000000024400000000000003e400000000000000840",
+            ),
+            (
+                "POLYGON ((30 10 3,40 40 3,30 10 3))",
+                "010300008001000000030000000000000000003e400000000000002440000000000000"
+                "08400000000000004440000000000000444000000000000008400000000000003e4000"
+                "000000000024400000000000000840",
+            ),
+            (
+                "MULTIPOINT (10 40 3,40 30 3)",
+                "0104000080020000000101000080000000000000244000000000000044400000000000"
+                "000840010100008000000000000044400000000000003e400000000000000840",
+            ),
+            (
+                "MULTILINESTRING ((10 10 3,20 20 3))",
+                "0105000080010000000102000080020000000000000000002440000000000000244000"
+                "00000000000840000000000000344000000000000034400000000000000840",
+            ),
+            (
+                "MULTIPOLYGON (((30 20 3,45 40 3,30 20 3)))",
+                "010600008001000000010300008001000000030000000000000000003e400000000000"
+                "0034400000000000000840000000000080464000000000000044400000000000000840"
+                "0000000000003e4000000000000034400000000000000840",
+            ),
+            (
+                "GEOMETRYCOLLECTION (POINT (40 10 3))",
+                "0107000080010000000101000080000000000000444000000000000024400000000000"
+                "000840",
+            ),
+        ]
+        for geom, wkb in tests:
+            with self.subTest(geom=geom):
+                g = OGRGeometry(geom)
+                self.assertEqual(g.wkt, geom)
+                self.assertEqual(g.wkb.hex(), wkb)
+
+    def test_measure_is_measure_and_set_measure(self):
+        geom = OGRGeometry("POINT (1 2 3)")
+        self.assertIs(geom.is_measured, False)
+        geom.set_measured(True)
+        self.assertIs(geom.is_measured, True)
+        self.assertEqual(geom.wkt, "POINT ZM (1 2 3 0)")
+        geom.set_measured(False)
+        self.assertIs(geom.is_measured, False)
+        self.assertEqual(geom.wkt, "POINT (1 2 3)")
+        msg = "Input to 'set_measured' must be a boolean, got 'None'"
+        with self.assertRaisesMessage(ValueError, msg):
+            geom.set_measured(None)
+
+    def test_point_m_coordinate(self):
+        geom = OGRGeometry("POINT ZM (1 2 3 4)")
+        self.assertEqual(geom.m, 4)
+        geom = OGRGeometry("POINT (1 2 3 4)")
+        self.assertEqual(geom.m, 4)
+        geom = OGRGeometry("POINT M (1 2 3)")
+        self.assertEqual(geom.m, 3)
+        geom = OGRGeometry("POINT Z (1 2 3)")
+        self.assertEqual(geom.m, None)
+
+    def test_point_m_tuple(self):
+        geom = OGRGeometry("POINT ZM (1 2 3 4)")
+        self.assertEqual(geom.tuple, (geom.x, geom.y, geom.z, geom.m))
+        geom = OGRGeometry("POINT M (1 2 3)")
+        self.assertEqual(geom.tuple, (geom.x, geom.y, geom.m))
+        geom = OGRGeometry("POINT Z (1 2 3)")
+        self.assertEqual(geom.tuple, (geom.x, geom.y, geom.z))
+        geom = OGRGeometry("POINT (1 2 3)")
+        self.assertEqual(geom.tuple, (geom.x, geom.y, geom.z))
+
+    def test_point_m_wkt_wkb(self):
+        wkt = "POINT ZM (1 2 3 4)"
+        geom = OGRGeometry(wkt)
+        self.assertEqual(geom.wkt, wkt)
+        self.assertEqual(
+            geom.wkb.hex(),
+            "01b90b0000000000000000f03f00000000000000"
+            "4000000000000008400000000000001040",
+        )
+        wkt = "POINT M (1 2 3)"
+        geom = OGRGeometry(wkt)
+        self.assertEqual(geom.wkt, wkt)
+        self.assertEqual(
+            geom.wkb.hex(),
+            "01d1070000000000000000f03f00000000000000400000000000000840",
+        )
+
+    def test_point_m_dimension_types(self):
+        geom = OGRGeometry("POINT ZM (1 2 3 4)")
+        self.assertEqual(geom.geom_type.name, "PointZM")
+        self.assertEqual(geom.geom_type.num, 3001)
+        geom = OGRGeometry("POINT M (1 2 3)")
+        self.assertEqual(geom.geom_type.name, "PointM")
+        self.assertEqual(geom.geom_type.num, 2001)
+
+    def test_point_m_dimension_geos(self):
+        """GEOSGeometry does not yet support the M dimension."""
+        geom = OGRGeometry("POINT ZM (1 2 3 4)")
+        self.assertEqual(geom.geos.wkt, "POINT Z (1 2 3)")
+        geom = OGRGeometry("POINT M (1 2 3)")
+        self.assertEqual(geom.geos.wkt, "POINT (1 2)")
+
+    def test_centroid(self):
+        point = OGRGeometry("POINT (1 2 3)")
+        self.assertEqual(point.centroid.wkt, "POINT (1 2)")
+        linestring = OGRGeometry("LINESTRING (0 0 0, 1 1 1, 2 2 2)")
+        self.assertEqual(linestring.centroid.wkt, "POINT (1 1)")
+        polygon = OGRGeometry("POLYGON((0 0, 10 0, 10 10, 0 10, 0 0))")
+        self.assertEqual(polygon.centroid.wkt, "POINT (5 5)")
+        multipoint = OGRGeometry("MULTIPOINT (0 0,10 10)")
+        self.assertEqual(multipoint.centroid.wkt, "POINT (5 5)")
+        multilinestring = OGRGeometry(
+            "MULTILINESTRING ((0 0,0 10,0 20),(10 0,10 10,10 20))"
+        )
+        self.assertEqual(multilinestring.centroid.wkt, "POINT (5 10)")
+        multipolygon = OGRGeometry(
+            "MULTIPOLYGON(((0 0, 10 0, 10 10, 0 10, 0 0)),"
+            "((20 20, 20 30, 30 30, 30 20, 20 20)))"
+        )
+        self.assertEqual(multipolygon.centroid.wkt, "POINT (15 15)")
+        geometrycollection = OGRGeometry(
+            "GEOMETRYCOLLECTION (POINT (110 260),LINESTRING (110 0,110 60))"
+        )
+        self.assertEqual(geometrycollection.centroid.wkt, "POINT (110 30)")
+
+    def test_linestring_m_dimension(self):
+        geom = OGRGeometry("LINESTRING(0 1 2 10, 1 2 3 11, 2 3 4 12)")
+        self.assertIs(geom.is_measured, True)
+        self.assertEqual(geom.m, [10.0, 11.0, 12.0])
+        self.assertEqual(geom[0], (0.0, 1.0, 2.0, 10.0))
+
+        geom = OGRGeometry("LINESTRING M (0 1 10, 1 2 11)")
+        self.assertIs(geom.is_measured, True)
+        self.assertEqual(geom.m, [10.0, 11.0])
+        self.assertEqual(geom[0], (0.0, 1.0, 10.0))
+
+        geom.set_measured(False)
+        self.assertIs(geom.is_measured, False)
+        self.assertIs(geom.m, None)
+
+    def test_polygon_m_dimension(self):
+        geom = OGRGeometry("POLYGON Z ((0 0 0, 10 0 0, 10 10 0, 0 10 0, 0 0 0))")
+        self.assertIs(geom.is_measured, False)
+        self.assertEqual(
+            geom.shell.wkt, "LINEARRING (0 0 0,10 0 0,10 10 0,0 10 0,0 0 0)"
+        )
+
+        geom = OGRGeometry("POLYGON M ((0 0 0, 10 0 0, 10 10 0, 0 10 0, 0 0 0))")
+        self.assertIs(geom.is_measured, True)
+        self.assertEqual(
+            geom.shell.wkt, "LINEARRING M (0 0 0,10 0 0,10 10 0,0 10 0,0 0 0)"
+        )
+
+        geom = OGRGeometry(
+            "POLYGON ZM ((0 0 0 1, 10 0 0 1, 10 10 0 1, 0 10 0 1, 0 0 0 1))"
+        )
+        self.assertIs(geom.is_measured, True)
+        self.assertEqual(
+            geom.shell.wkt,
+            "LINEARRING ZM (0 0 0 1,10 0 0 1,10 10 0 1,0 10 0 1,0 0 0 1)",
+        )
+
+        geom.set_measured(False)
+        self.assertEqual(geom.wkt, "POLYGON ((0 0 0,10 0 0,10 10 0,0 10 0,0 0 0))")
+        self.assertEqual(
+            geom.shell.wkt, "LINEARRING (0 0 0,10 0 0,10 10 0,0 10 0,0 0 0)"
+        )
+
+    def test_multi_geometries_m_dimension(self):
+        tests = [
+            "MULTIPOINT M ((10 40 10), (40 30 10), (20 20 10))",
+            "MULTIPOINT ZM ((10 40 0 10), (40 30 1 10), (20 20 1 10))",
+            "MULTILINESTRING M ((10 10 1, 20 20 2),(40 40 1, 30 30 2))",
+            "MULTILINESTRING ZM ((10 10 0 1, 20 20 0 2),(40 40 1, 30 30 0 2))",
+            (
+                "MULTIPOLYGON ZM (((30 20 1 0, 45 40 1 0, 30 20 1 0)),"
+                "((15 5 0 0, 40 10 0 0, 15 5 0 0)))"
+            ),
+            (
+                "GEOMETRYCOLLECTION M (POINT M (40 10 0),"
+                "LINESTRING M (10 10 0, 20 20 0, 10 40 0))"
+            ),
+            (
+                "GEOMETRYCOLLECTION ZM (POINT ZM (40 10 0 1),"
+                "LINESTRING ZM (10 10 1 0, 20 20 1 0, 10 40 1 0))"
+            ),
+        ]
+        for geom_input in tests:
+            with self.subTest(geom_input=geom_input):
+                geom = OGRGeometry(geom_input)
+                self.assertIs(geom.is_measured, True)
+
+    def test_has_curve(self):
+        for geom in self.geometries.curved_geoms:
+            with self.subTest(wkt=geom.wkt):
+                geom = OGRGeometry(geom.wkt)
+                self.assertIs(geom.has_curve, True)
+                msg = f"GEOS does not support {geom.__class__.__qualname__}."
+                with self.assertRaisesMessage(GEOSException, msg):
+                    geom.geos
+        geom = OGRGeometry("POINT (0 1)")
+        self.assertIs(geom.has_curve, False)
+
+    def test_get_linear_geometry(self):
+        geom = OGRGeometry("CIRCULARSTRING (-0.797 0.466,-0.481 0.62,-0.419 0.473)")
+        linear = geom.get_linear_geometry()
+        self.assertEqual(linear.geom_name, "LINESTRING")
+        self.assertIs(linear.has_curve, False)
+
+    def test_get_linear_geometry_no_conversion_possible(self):
+        wkt = "POINT (0 0)"
+        geom = OGRGeometry(wkt)
+        geom2 = geom.get_linear_geometry()
+        self.assertEqual(geom2.wkt, wkt)
+
+    def test_get_curve_geometry(self):
+        linear_string = OGRGeometry(
+            "LINESTRING (-0.797 0.466,-0.797500910583869 0.479079607685707,"
+            "-0.797096828208069 0.49216256476959,-0.795789684575482 0.505186328593822,"
+            "-0.793585728444384 0.518088639471983,-0.79049549575663 0.530807818319715,"
+            "-0.786533759270668 0.543283061509385,-0.781719457941079 0.555454731539925,"
+            "-0.776075606381369 0.567264642132187,-0.769629184843353 0.578656336386302,"
+            "-0.76241101023902 0.589575356672327,-0.754455588821145 0.599969504963013,"
+            "-0.745800951227352 0.609789092364991,-0.736488470675795 0.618987176654798,"
+            "-0.726562665181888 0.627519786684672,-0.716070984741265 0.635346132585369,"
+            "-0.705063584496685 0.642428800760598,-0.693593084972889 0.648733932741749,"
+            "-0.681714320525941 0.654231387047048,-0.669484077209319 0.658894883272069,"
+            "-0.656960821309923 0.662702127722269,-0.644204419852031 0.665634919987354,"
+            "-0.631275854404748 0.667679239947688,-0.618236929561618 0.668825314797118,"
+            "-0.60514997748578 0.669067665761503,-0.592077559933017 0.66840513428977,"
+            "-0.579082169177269 0.666840887592428,-0.566225929268313 0.664382403500809,"
+            "-0.553570299049824 0.661041434719465,-0.541175778357228 0.656833952642756,"
+            "-0.529101618800212 0.651780071004197,-0.5174055405123 0.645903949723276,"
+            "-0.506143456221622 0.639233679409784,-0.495369203961872 0.631801147077652,"
+            "-0.485134289701335 0.623641883709865,-0.475487641120239 0.614794894404014,"
+            "-0.46647537371355 0.605302471909454,-0.458140570337321 0.595209994448282,"
+            "-0.450523075252448 0.58456570878613,-0.443659303650563 0.573420499590156,"
+            "-0.437582067572208 0.561827646176397,-0.432320419050072 0.549842567809747,"
+            "-0.427899511226613 0.537522558773986,-0.424340478110267 0.524926514478182,"
+            "-0.421660333544978 0.512114649909193,-0.419871889876113 0.499148211775737,"
+            "-0.418983696701434 0.486089185720561,-0.419 0.473)"
+        )
+        curve = linear_string.get_curve_geometry()
+        self.assertEqual(curve.geom_name, "CIRCULARSTRING")
+        self.assertEqual(
+            curve.wkt,
+            "CIRCULARSTRING (-0.797 0.466,-0.618236929561618 "
+            "0.668825314797118,-0.419 0.473)",
+        )
+
+    def test_get_curve_geometry_no_conversion_possible(self):
+        geom = OGRGeometry("LINESTRING (0 0, 1 0, 2 0)")
+        geom2 = geom.get_curve_geometry()
+        self.assertEqual(geom2.wkt, geom.wkt)
+
+    def test_curved_geometries(self):
+        for geom in self.geometries.curved_geoms:
+            with self.subTest(wkt=geom.wkt, geom_name=geom.name):
+                g = OGRGeometry(geom.wkt)
+                self.assertEqual(geom.name, g.geom_type.name)
+                self.assertEqual(geom.num, g.geom_type.num)
+                msg = f"GEOS does not support {g.__class__.__qualname__}."
+                with self.assertRaisesMessage(GEOSException, msg):
+                    g.geos
+
+    def test_circularstring_has_linestring_features(self):
+        geom = OGRGeometry("CIRCULARSTRING ZM (1 5 0 1, 6 2 0 2, 7 3 0 3)")
+        self.assertIsInstance(geom, CircularString)
+        self.assertEqual(geom.x, [1, 6, 7])
+        self.assertEqual(geom.y, [5, 2, 3])
+        self.assertEqual(geom.z, [0, 0, 0])
+        self.assertEqual(geom.m, [1, 2, 3])
+        self.assertEqual(
+            geom.tuple,
+            ((1.0, 5.0, 0.0, 1.0), (6.0, 2.0, 0.0, 2.0), (7.0, 3.0, 0.0, 3.0)),
+        )
+        self.assertEqual(geom[0], (1, 5, 0, 1))
+        self.assertEqual(len(geom), 3)
+
+    def test_curvepolygon_has_polygon_features(self):
+        geom = OGRGeometry(
+            "CURVEPOLYGON ZM (CIRCULARSTRING ZM (0 0 0 0, 4 0 0 0, 4 4 0 0, 0 4 0 0, "
+            "0 0 0 0), (1 1 0 0, 3 3 0 0, 3 1 0 0, 1 1 0 0))"
+        )
+        self.assertIsInstance(geom, CurvePolygon)
+        self.assertIsInstance(geom.shell, CircularString)
+
+
+class DeprecationTests(SimpleTestCase):
+    def test_coord_setter_deprecation(self):
+        geom = OGRGeometry("POINT (1 2)")
+        msg = "coord_dim setter is deprecated. Use set_3d() instead."
+        with self.assertWarnsMessage(RemovedInDjango60Warning, msg) as ctx:
+            geom.coord_dim = 3
+        self.assertEqual(geom.coord_dim, 3)
+        self.assertEqual(ctx.filename, __file__)

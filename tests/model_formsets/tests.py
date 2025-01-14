@@ -9,10 +9,12 @@ from django.db import models
 from django.forms.formsets import formset_factory
 from django.forms.models import (
     BaseModelFormSet,
+    ModelForm,
     _get_foreign_key,
     inlineformset_factory,
     modelformset_factory,
 )
+from django.forms.renderers import DjangoTemplates
 from django.http import QueryDict
 from django.test import TestCase, skipUnlessDBFeature
 
@@ -1701,6 +1703,30 @@ class ModelFormsetTest(TestCase):
             [{}, {"__all__": ["Please correct the duplicate values below."]}, {}],
         )
 
+    def test_inlineformset_with_jsonfield(self):
+        class BookForm(forms.ModelForm):
+            title = forms.JSONField()
+
+            class Meta:
+                model = Book
+                fields = ("title",)
+
+        BookFormSet = inlineformset_factory(Author, Book, form=BookForm)
+        data = {
+            "book_set-TOTAL_FORMS": "3",
+            "book_set-INITIAL_FORMS": "0",
+            "book_set-MAX_NUM_FORMS": "",
+            "book_set-0-title": {"test1": "test2"},
+            "book_set-1-title": {"test1": "test2"},
+            "book_set-2-title": {"test3": "test4"},
+        }
+        author = Author.objects.create(name="test")
+        formset = BookFormSet(data, instance=author)
+        self.assertEqual(
+            formset.errors,
+            [{}, {"__all__": ["Please correct the duplicate values below."]}, {}],
+        )
+
     def test_model_formset_with_custom_pk(self):
         # a formset for a Model that has a custom primary key that still needs to be
         # added to the formset automatically
@@ -2365,3 +2391,44 @@ class TestModelFormsetOverridesTroughFormMeta(TestCase):
         BookFormSet = modelformset_factory(Author, fields="__all__", renderer=renderer)
         formset = BookFormSet()
         self.assertEqual(formset.renderer, renderer)
+
+    def test_modelformset_factory_default_renderer(self):
+        class CustomRenderer(DjangoTemplates):
+            pass
+
+        class ModelFormWithDefaultRenderer(ModelForm):
+            default_renderer = CustomRenderer()
+
+        BookFormSet = modelformset_factory(
+            Author, form=ModelFormWithDefaultRenderer, fields="__all__"
+        )
+        formset = BookFormSet()
+        self.assertEqual(
+            formset.forms[0].renderer, ModelFormWithDefaultRenderer.default_renderer
+        )
+        self.assertEqual(
+            formset.empty_form.renderer, ModelFormWithDefaultRenderer.default_renderer
+        )
+        self.assertIsInstance(formset.renderer, DjangoTemplates)
+
+    def test_inlineformset_factory_default_renderer(self):
+        class CustomRenderer(DjangoTemplates):
+            pass
+
+        class ModelFormWithDefaultRenderer(ModelForm):
+            default_renderer = CustomRenderer()
+
+        BookFormSet = inlineformset_factory(
+            Author,
+            Book,
+            form=ModelFormWithDefaultRenderer,
+            fields="__all__",
+        )
+        formset = BookFormSet()
+        self.assertEqual(
+            formset.forms[0].renderer, ModelFormWithDefaultRenderer.default_renderer
+        )
+        self.assertEqual(
+            formset.empty_form.renderer, ModelFormWithDefaultRenderer.default_renderer
+        )
+        self.assertIsInstance(formset.renderer, DjangoTemplates)

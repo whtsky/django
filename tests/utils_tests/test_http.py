@@ -34,18 +34,7 @@ class URLEncodeTests(SimpleTestCase):
 
     def test_dict(self):
         result = urlencode({"a": 1, "b": 2, "c": 3})
-        # Dictionaries are treated as unordered.
-        self.assertIn(
-            result,
-            [
-                "a=1&b=2&c=3",
-                "a=1&c=3&b=2",
-                "b=2&a=1&c=3",
-                "b=2&c=3&a=1",
-                "c=3&a=1&b=2",
-                "c=3&b=2&a=1",
-            ],
-        )
+        self.assertEqual(result, "a=1&b=2&c=3")
 
     def test_dict_containing_sequence_not_doseq(self):
         self.assertEqual(urlencode({"a": [1, 2]}, doseq=False), "a=%5B1%2C+2%5D")
@@ -79,14 +68,7 @@ class URLEncodeTests(SimpleTestCase):
             ),
             doseq=True,
         )
-        # MultiValueDicts are similarly unordered.
-        self.assertIn(
-            result,
-            [
-                "name=Adrian&name=Simon&position=Developer",
-                "position=Developer&name=Adrian&name=Simon",
-            ],
-        )
+        self.assertEqual(result, "name=Adrian&name=Simon&position=Developer")
 
     def test_dict_with_bytes_values(self):
         self.assertEqual(urlencode({"a": b"abc"}, doseq=True), "a=abc")
@@ -352,10 +334,9 @@ class HttpDateProcessingTests(unittest.TestCase):
         )
 
     @unittest.skipIf(platform.architecture()[0] == "32bit", "The Year 2038 problem.")
-    @mock.patch("django.utils.http.datetime.datetime")
+    @mock.patch("django.utils.http.datetime")
     def test_parsing_rfc850(self, mocked_datetime):
         mocked_datetime.side_effect = datetime
-        mocked_datetime.now = mock.Mock()
         now_1 = datetime(2019, 11, 6, 8, 49, 37, tzinfo=timezone.utc)
         now_2 = datetime(2020, 11, 6, 8, 49, 37, tzinfo=timezone.utc)
         now_3 = datetime(2048, 11, 6, 8, 49, 37, tzinfo=timezone.utc)
@@ -530,6 +511,7 @@ class ContentDispositionHeaderTests(unittest.TestCase):
                 (True, '"espécimen" filename'),
                 "attachment; filename*=utf-8''%22esp%C3%A9cimen%22%20filename",
             ),
+            ((True, "some\nfile"), "attachment; filename*=utf-8''some%0Afile"),
         )
 
         for (is_attachment, filename), expected in tests:

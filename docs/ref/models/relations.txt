@@ -14,9 +14,11 @@ Related objects reference
 
             from django.db import models
 
+
             class Blog(models.Model):
                 # ...
                 pass
+
 
             class Entry(models.Model):
                 blog = models.ForeignKey(Blog, on_delete=models.CASCADE, null=True)
@@ -24,11 +26,13 @@ Related objects reference
       In the above example, the methods below will be available on
       the manager ``blog.entry_set``.
 
-    * Both sides of a :class:`~django.db.models.ManyToManyField` relation::
+    * Both sides of a :class:`~django.db.models.ManyToManyField` relation
+      ::
 
             class Topping(models.Model):
                 # ...
                 pass
+
 
             class Pizza(models.Model):
                 toppings = models.ManyToManyField(Topping)
@@ -49,7 +53,7 @@ Related objects reference
 
             >>> b = Blog.objects.get(id=1)
             >>> e = Entry.objects.get(id=234)
-            >>> b.entry_set.add(e) # Associates Entry e with Blog b.
+            >>> b.entry_set.add(e)  # Associates Entry e with Blog b.
 
         In the example above, in the case of a
         :class:`~django.db.models.ForeignKey` relationship,
@@ -80,10 +84,6 @@ Related objects reference
         dictionary and they will be evaluated once before creating any
         intermediate instance(s).
 
-        .. versionchanged:: 4.2
-
-            ``aadd()`` method was added.
-
     .. method:: create(through_defaults=None, **kwargs)
     .. method:: acreate(through_defaults=None, **kwargs)
 
@@ -96,9 +96,7 @@ Related objects reference
 
             >>> b = Blog.objects.get(id=1)
             >>> e = b.entry_set.create(
-            ...     headline='Hello',
-            ...     body_text='Hi',
-            ...     pub_date=datetime.date(2005, 1, 1)
+            ...     headline="Hello", body_text="Hi", pub_date=datetime.date(2005, 1, 1)
             ... )
 
             # No need to call e.save() at this point -- it's already been saved.
@@ -108,12 +106,7 @@ Related objects reference
         .. code-block:: pycon
 
             >>> b = Blog.objects.get(id=1)
-            >>> e = Entry(
-            ...     blog=b,
-            ...     headline='Hello',
-            ...     body_text='Hi',
-            ...     pub_date=datetime.date(2005, 1, 1)
-            ... )
+            >>> e = Entry(blog=b, headline="Hello", body_text="Hi", pub_date=datetime.date(2005, 1, 1))
             >>> e.save(force_insert=True)
 
         Note that there's no need to specify the keyword argument of the model
@@ -137,7 +130,7 @@ Related objects reference
 
             >>> b = Blog.objects.get(id=1)
             >>> e = Entry.objects.get(id=234)
-            >>> b.entry_set.remove(e) # Disassociates Entry e from Blog b.
+            >>> b.entry_set.remove(e)  # Disassociates Entry e from Blog b.
 
         Similar to :meth:`add()`, ``e.save()`` is called in the example above
         to perform the update. Using ``remove()`` with a many-to-many
@@ -171,10 +164,6 @@ Related objects reference
         For many-to-many relationships, the ``bulk`` keyword argument doesn't
         exist.
 
-        .. versionchanged:: 4.2
-
-            ``aremove()`` method was added.
-
     .. method:: clear(bulk=True)
     .. method:: aclear(bulk=True)
 
@@ -196,10 +185,6 @@ Related objects reference
 
         For many-to-many relationships, the ``bulk`` keyword argument doesn't
         exist.
-
-        .. versionchanged:: 4.2
-
-            ``aclear()`` method was added.
 
     .. method:: set(objs, bulk=True, clear=False, through_defaults=None)
     .. method:: aset(objs, bulk=True, clear=False, through_defaults=None)
@@ -238,10 +223,6 @@ Related objects reference
         needed. You can use callables as values in the ``through_defaults``
         dictionary and they will be evaluated once before creating any
         intermediate instance(s).
-
-        .. versionchanged:: 4.2
-
-            ``aset()`` method was added.
 
     .. note::
 

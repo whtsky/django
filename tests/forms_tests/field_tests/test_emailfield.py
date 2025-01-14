@@ -8,8 +8,9 @@ from . import FormFieldAssertionsMixin
 class EmailFieldTest(FormFieldAssertionsMixin, SimpleTestCase):
     def test_emailfield_1(self):
         f = EmailField()
+        self.assertEqual(f.max_length, 320)
         self.assertWidgetRendersTo(
-            f, '<input type="email" name="f" id="id_f" required>'
+            f, '<input type="email" name="f" id="id_f" maxlength="320" required>'
         )
         with self.assertRaisesMessage(ValidationError, "'This field is required.'"):
             f.clean("")
@@ -30,7 +31,8 @@ class EmailFieldTest(FormFieldAssertionsMixin, SimpleTestCase):
         # Check for runaway regex security problem. This will take a long time
         # if the security fix isn't in place.
         addr = "viewx3dtextx26qx3d@yahoo.comx26latlngx3d15854521645943074058"
-        self.assertEqual(addr, f.clean(addr))
+        with self.assertRaisesMessage(ValidationError, "Enter a valid email address."):
+            f.clean(addr)
 
     def test_emailfield_not_required(self):
         f = EmailField(required=False)
@@ -70,6 +72,6 @@ class EmailFieldTest(FormFieldAssertionsMixin, SimpleTestCase):
         self.assertIsNone(f.clean(None))
 
     def test_emailfield_unable_to_set_strip_kwarg(self):
-        msg = "__init__() got multiple values for keyword argument 'strip'"
+        msg = "got multiple values for keyword argument 'strip'"
         with self.assertRaisesMessage(TypeError, msg):
             EmailField(strip=False)

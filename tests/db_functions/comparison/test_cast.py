@@ -52,7 +52,8 @@ class CastTests(TestCase):
             ),
         ).get()
         self.assertEqual(float_obj.cast_f1_decimal, decimal.Decimal("-1.93"))
-        self.assertEqual(float_obj.cast_f2_decimal, decimal.Decimal("3.5"))
+        expected = "3.4" if connection.features.rounds_to_even else "3.5"
+        self.assertEqual(float_obj.cast_f2_decimal, decimal.Decimal(expected))
         author_obj = Author.objects.annotate(
             cast_alias_decimal=Cast(
                 "alias", models.DecimalField(max_digits=8, decimal_places=2)
@@ -75,6 +76,15 @@ class CastTests(TestCase):
             with self.subTest(field_class=field_class):
                 numbers = Author.objects.annotate(cast_int=Cast("alias", field_class()))
                 self.assertEqual(numbers.get().cast_int, 1)
+
+    def test_cast_to_integer_foreign_key(self):
+        numbers = Author.objects.annotate(
+            cast_fk=Cast(
+                models.Value("0"),
+                models.ForeignKey(Author, on_delete=models.SET_NULL),
+            )
+        )
+        self.assertEqual(numbers.get().cast_fk, 0)
 
     def test_cast_to_duration(self):
         duration = datetime.timedelta(days=1, seconds=2, microseconds=3)

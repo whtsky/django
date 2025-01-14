@@ -4,6 +4,7 @@ The following classes are for testing basic data marshalling, including
 NULL values, where allowed.
 The basic idea is to have a model for each Django data type.
 """
+
 import uuid
 
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
@@ -11,6 +12,15 @@ from django.contrib.contenttypes.models import ContentType
 from django.db import models
 
 from .base import BaseModel
+
+try:
+    from PIL import Image  # NOQA
+except ImportError:
+    ImageData = None
+else:
+
+    class ImageData(models.Model):
+        data = models.ImageField(null=True)
 
 
 class BinaryData(models.Model):
@@ -59,10 +69,6 @@ class IntegerData(models.Model):
 
 class BigIntegerData(models.Model):
     data = models.BigIntegerField(null=True)
-
-
-# class ImageData(models.Model):
-#    data = models.ImageField(null=True)
 
 
 class GenericIPAddressData(models.Model):
@@ -209,10 +215,6 @@ class EmailPKData(models.Model):
     data = models.EmailField(primary_key=True)
 
 
-# class FilePKData(models.Model):
-#    data = models.FileField(primary_key=True)
-
-
 class FilePathPKData(models.Model):
     data = models.FilePathField(primary_key=True)
 
@@ -223,10 +225,6 @@ class FloatPKData(models.Model):
 
 class IntegerPKData(models.Model):
     data = models.IntegerField(primary_key=True)
-
-
-# class ImagePKData(models.Model):
-#    data = models.ImageField(primary_key=True)
 
 
 class GenericIPAddressPKData(models.Model):
@@ -249,11 +247,15 @@ class SmallPKData(models.Model):
     data = models.SmallIntegerField(primary_key=True)
 
 
-# class TextPKData(models.Model):
-#     data = models.TextField(primary_key=True)
+class TextPKData(models.Model):
+    data = models.TextField(primary_key=True)
 
-# class TimePKData(models.Model):
-#    data = models.TimeField(primary_key=True)
+    class Meta:
+        required_db_features = ["supports_index_on_text_field"]
+
+
+class TimePKData(models.Model):
+    data = models.TimeField(primary_key=True)
 
 
 class UUIDData(models.Model):

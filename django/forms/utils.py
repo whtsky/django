@@ -58,6 +58,29 @@ class RenderableMixin:
     __html__ = render
 
 
+class RenderableFieldMixin(RenderableMixin):
+    def as_field_group(self):
+        return self.render()
+
+    def as_hidden(self):
+        raise NotImplementedError(
+            "Subclasses of RenderableFieldMixin must provide an as_hidden() method."
+        )
+
+    def as_widget(self):
+        raise NotImplementedError(
+            "Subclasses of RenderableFieldMixin must provide an as_widget() method."
+        )
+
+    def __str__(self):
+        """Render this field as an HTML widget."""
+        if self.field.show_hidden_initial:
+            return self.as_widget() + self.as_hidden(only_initial=True)
+        return self.as_widget()
+
+    __html__ = __str__
+
+
 class RenderableFormMixin(RenderableMixin):
     def as_p(self):
         """Render as <p> elements."""
@@ -124,7 +147,7 @@ class ErrorList(UserList, list, RenderableErrorMixin):
     template_name_text = "django/forms/errors/list/text.txt"
     template_name_ul = "django/forms/errors/list/ul.html"
 
-    def __init__(self, initlist=None, error_class=None, renderer=None):
+    def __init__(self, initlist=None, error_class=None, renderer=None, field_id=None):
         super().__init__(initlist)
 
         if error_class is None:
@@ -132,6 +155,7 @@ class ErrorList(UserList, list, RenderableErrorMixin):
         else:
             self.error_class = "errorlist {}".format(error_class)
         self.renderer = renderer or get_default_renderer()
+        self.field_id = field_id
 
     def as_data(self):
         return ValidationError(self.data).error_list
@@ -139,6 +163,7 @@ class ErrorList(UserList, list, RenderableErrorMixin):
     def copy(self):
         copy = super().copy()
         copy.error_class = self.error_class
+        copy.renderer = self.renderer
         return copy
 
     def get_json_data(self, escape_html=False):

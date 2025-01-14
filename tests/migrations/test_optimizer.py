@@ -1,47 +1,16 @@
 from django.db import migrations, models
 from django.db.migrations import operations
 from django.db.migrations.optimizer import MigrationOptimizer
-from django.db.migrations.serializer import serializer_factory
-from django.test import SimpleTestCase
+from django.db.models.functions import Abs
 
 from .models import EmptyManager, UnicodeModel
+from .test_base import OptimizerTestBase
 
 
-class OptimizerTests(SimpleTestCase):
+class OptimizerTests(OptimizerTestBase):
     """
-    Tests the migration autodetector.
+    Tests the migration optimizer.
     """
-
-    def optimize(self, operations, app_label):
-        """
-        Handy shortcut for getting results + number of loops
-        """
-        optimizer = MigrationOptimizer()
-        return optimizer.optimize(operations, app_label), optimizer._iterations
-
-    def serialize(self, value):
-        return serializer_factory(value).serialize()[0]
-
-    def assertOptimizesTo(
-        self, operations, expected, exact=None, less_than=None, app_label=None
-    ):
-        result, iterations = self.optimize(operations, app_label or "migrations")
-        result = [self.serialize(f) for f in result]
-        expected = [self.serialize(f) for f in expected]
-        self.assertEqual(expected, result)
-        if exact is not None and iterations != exact:
-            raise self.failureException(
-                "Optimization did not take exactly %s iterations (it took %s)"
-                % (exact, iterations)
-            )
-        if less_than is not None and iterations >= less_than:
-            raise self.failureException(
-                "Optimization did not take less than %s iterations (it took %s)"
-                % (less_than, iterations)
-            )
-
-    def assertDoesNotOptimize(self, operations, **kwargs):
-        self.assertOptimizesTo(operations, operations, **kwargs)
 
     def test_none_app_label(self):
         optimizer = MigrationOptimizer()
@@ -153,6 +122,46 @@ class OptimizerTests(SimpleTestCase):
             ],
         )
 
+    def test_create_alter_model_table(self):
+        self.assertOptimizesTo(
+            [
+                migrations.CreateModel("Foo", fields=[]),
+                migrations.AlterModelTable(
+                    name="foo",
+                    table="foo",
+                ),
+            ],
+            [
+                migrations.CreateModel(
+                    "Foo",
+                    fields=[],
+                    options={
+                        "db_table": "foo",
+                    },
+                ),
+            ],
+        )
+
+    def test_create_alter_model_table_comment(self):
+        self.assertOptimizesTo(
+            [
+                migrations.CreateModel("Foo", fields=[]),
+                migrations.AlterModelTableComment(
+                    name="foo",
+                    table_comment="A lovely table.",
+                ),
+            ],
+            [
+                migrations.CreateModel(
+                    "Foo",
+                    fields=[],
+                    options={
+                        "db_table_comment": "A lovely table.",
+                    },
+                ),
+            ],
+        )
+
     def test_create_model_and_remove_model_options(self):
         self.assertOptimizesTo(
             [
@@ -221,10 +230,10 @@ class OptimizerTests(SimpleTestCase):
             migrations.AlterOrderWithRespectTo("Foo", "a")
         )
 
-    def _test_alter_alter_model(self, alter_foo, alter_bar):
+    def _test_alter_alter(self, alter_foo, alter_bar):
         """
         Two AlterUniqueTogether/AlterIndexTogether/AlterOrderWithRespectTo
-        should collapse into the second.
+        /AlterField should collapse into the second.
         """
         self.assertOptimizesTo(
             [
@@ -237,27 +246,33 @@ class OptimizerTests(SimpleTestCase):
         )
 
     def test_alter_alter_table_model(self):
-        self._test_alter_alter_model(
+        self._test_alter_alter(
             migrations.AlterModelTable("Foo", "a"),
             migrations.AlterModelTable("Foo", "b"),
         )
 
     def test_alter_alter_unique_model(self):
-        self._test_alter_alter_model(
+        self._test_alter_alter(
             migrations.AlterUniqueTogether("Foo", [["a", "b"]]),
             migrations.AlterUniqueTogether("Foo", [["a", "c"]]),
         )
 
     def test_alter_alter_index_model(self):
-        self._test_alter_alter_model(
+        self._test_alter_alter(
             migrations.AlterIndexTogether("Foo", [["a", "b"]]),
             migrations.AlterIndexTogether("Foo", [["a", "c"]]),
         )
 
     def test_alter_alter_owrt_model(self):
-        self._test_alter_alter_model(
+        self._test_alter_alter(
             migrations.AlterOrderWithRespectTo("Foo", "a"),
             migrations.AlterOrderWithRespectTo("Foo", "b"),
+        )
+
+    def test_alter_alter_field(self):
+        self._test_alter_alter(
+            migrations.AlterField("Foo", "name", models.IntegerField()),
+            migrations.AlterField("Foo", "name", models.IntegerField(help_text="help")),
         )
 
     def test_optimize_through_create(self):
@@ -1151,4 +1166,309 @@ class OptimizerTests(SimpleTestCase):
                     "Pony", new_name="new_name", old_fields=("weight", "pink")
                 ),
             ]
+        )
+
+    def test_add_rename_index(self):
+        tests = [
+            models.Index(fields=["weight", "pink"], name="mid_name"),
+            models.Index(Abs("weight"), name="mid_name"),
+            models.Index(
+                Abs("weight"), name="mid_name", condition=models.Q(weight__gt=0)
+            ),
+        ]
+        for index in tests:
+            with self.subTest(index=index):
+                renamed_index = index.clone()
+                renamed_index.name = "new_name"
+                self.assertOptimizesTo(
+                    [
+                        migrations.AddIndex("Pony", index),
+                        migrations.RenameIndex(
+                            "Pony", new_name="new_name", old_name="mid_name"
+                        ),
+                    ],
+                    [
+                        migrations.AddIndex("Pony", renamed_index),
+                    ],
+                )
+                self.assertDoesNotOptimize(
+                    [
+                        migrations.AddIndex("Pony", index),
+                        migrations.RenameIndex(
+                            "Pony", new_name="new_name", old_name="other_name"
+                        ),
+                    ],
+                )
+
+    def test_add_remove_index(self):
+        self.assertOptimizesTo(
+            [
+                migrations.AddIndex(
+                    "Pony",
+                    models.Index(
+                        fields=["weight", "pink"], name="idx_pony_weight_pink"
+                    ),
+                ),
+                migrations.RemoveIndex("Pony", "idx_pony_weight_pink"),
+            ],
+            [],
+        )
+
+    def test_add_remove_constraint(self):
+        gt_constraint = models.CheckConstraint(
+            condition=models.Q(pink__gt=2), name="constraint_pony_pink_gt_2"
+        )
+        self.assertOptimizesTo(
+            [
+                migrations.AddConstraint("Pony", gt_constraint),
+                migrations.RemoveConstraint("Pony", gt_constraint.name),
+            ],
+            [],
+        )
+        self.assertDoesNotOptimize(
+            [
+                migrations.AddConstraint("Pony", gt_constraint),
+                migrations.RemoveConstraint("Pony", "other_name"),
+            ],
+        )
+
+    def test_multiple_alter_constraints(self):
+        gt_constraint_violation_msg_added = models.CheckConstraint(
+            condition=models.Q(pink__gt=2),
+            name="pink_gt_2",
+            violation_error_message="ERROR",
+        )
+        gt_constraint_violation_msg_altered = models.CheckConstraint(
+            condition=models.Q(pink__gt=2),
+            name="pink_gt_2",
+            violation_error_message="error",
+        )
+        self.assertOptimizesTo(
+            [
+                migrations.AlterConstraint(
+                    "Pony", "pink_gt_2", gt_constraint_violation_msg_added
+                ),
+                migrations.AlterConstraint(
+                    "Pony", "pink_gt_2", gt_constraint_violation_msg_altered
+                ),
+            ],
+            [
+                migrations.AlterConstraint(
+                    "Pony", "pink_gt_2", gt_constraint_violation_msg_altered
+                )
+            ],
+        )
+        other_constraint_violation_msg = models.CheckConstraint(
+            condition=models.Q(weight__gt=3),
+            name="pink_gt_3",
+            violation_error_message="error",
+        )
+        self.assertDoesNotOptimize(
+            [
+                migrations.AlterConstraint(
+                    "Pony", "pink_gt_2", gt_constraint_violation_msg_added
+                ),
+                migrations.AlterConstraint(
+                    "Pony", "pink_gt_3", other_constraint_violation_msg
+                ),
+            ]
+        )
+
+    def test_alter_remove_constraint(self):
+        self.assertOptimizesTo(
+            [
+                migrations.AlterConstraint(
+                    "Pony",
+                    "pink_gt_2",
+                    models.CheckConstraint(
+                        condition=models.Q(pink__gt=2), name="pink_gt_2"
+                    ),
+                ),
+                migrations.RemoveConstraint("Pony", "pink_gt_2"),
+            ],
+            [migrations.RemoveConstraint("Pony", "pink_gt_2")],
+        )
+
+    def test_add_alter_constraint(self):
+        constraint = models.CheckConstraint(
+            condition=models.Q(pink__gt=2), name="pink_gt_2"
+        )
+        constraint_with_error = models.CheckConstraint(
+            condition=models.Q(pink__gt=2),
+            name="pink_gt_2",
+            violation_error_message="error",
+        )
+        self.assertOptimizesTo(
+            [
+                migrations.AddConstraint("Pony", constraint),
+                migrations.AlterConstraint("Pony", "pink_gt_2", constraint_with_error),
+            ],
+            [migrations.AddConstraint("Pony", constraint_with_error)],
+        )
+
+    def test_create_model_add_index(self):
+        self.assertOptimizesTo(
+            [
+                migrations.CreateModel(
+                    name="Pony",
+                    fields=[
+                        ("weight", models.IntegerField()),
+                        ("age", models.IntegerField()),
+                    ],
+                    options={
+                        "indexes": [models.Index(fields=["age"], name="idx_pony_age")],
+                    },
+                ),
+                migrations.AddIndex(
+                    "Pony",
+                    models.Index(fields=["weight"], name="idx_pony_weight"),
+                ),
+            ],
+            [
+                migrations.CreateModel(
+                    name="Pony",
+                    fields=[
+                        ("weight", models.IntegerField()),
+                        ("age", models.IntegerField()),
+                    ],
+                    options={
+                        "indexes": [
+                            models.Index(fields=["age"], name="idx_pony_age"),
+                            models.Index(fields=["weight"], name="idx_pony_weight"),
+                        ],
+                    },
+                ),
+            ],
+        )
+
+    def test_create_model_remove_index(self):
+        self.assertOptimizesTo(
+            [
+                migrations.CreateModel(
+                    name="Pony",
+                    fields=[
+                        ("weight", models.IntegerField()),
+                        ("age", models.IntegerField()),
+                    ],
+                    options={
+                        "indexes": [
+                            models.Index(fields=["age"], name="idx_pony_age"),
+                            models.Index(fields=["weight"], name="idx_pony_weight"),
+                        ],
+                    },
+                ),
+                migrations.RemoveIndex("Pony", "idx_pony_age"),
+            ],
+            [
+                migrations.CreateModel(
+                    name="Pony",
+                    fields=[
+                        ("weight", models.IntegerField()),
+                        ("age", models.IntegerField()),
+                    ],
+                    options={
+                        "indexes": [
+                            models.Index(fields=["weight"], name="idx_pony_weight"),
+                        ],
+                    },
+                ),
+            ],
+        )
+
+    def test_create_model_rename_index_no_old_fields(self):
+        self.assertOptimizesTo(
+            [
+                migrations.CreateModel(
+                    name="Pony",
+                    fields=[
+                        ("weight", models.IntegerField()),
+                        ("age", models.IntegerField()),
+                    ],
+                    options={
+                        "indexes": [models.Index(fields=["age"], name="idx_pony_age")],
+                    },
+                ),
+                migrations.RenameIndex(
+                    "Pony", new_name="idx_pony_age_new", old_name="idx_pony_age"
+                ),
+            ],
+            [
+                migrations.CreateModel(
+                    name="Pony",
+                    fields=[
+                        ("weight", models.IntegerField()),
+                        ("age", models.IntegerField()),
+                    ],
+                    options={
+                        "indexes": [models.Index(fields=["age"], name="idx_pony_age")],
+                    },
+                ),
+                migrations.RenameIndex(
+                    "Pony", new_name="idx_pony_age_new", old_name="idx_pony_age"
+                ),
+            ],
+        )
+
+    def test_create_model_add_constraint(self):
+        gt_constraint = models.CheckConstraint(
+            condition=models.Q(weight__gt=0), name="pony_weight_gt_0"
+        )
+        self.assertOptimizesTo(
+            [
+                migrations.CreateModel(
+                    name="Pony",
+                    fields=[
+                        ("weight", models.IntegerField()),
+                    ],
+                ),
+                migrations.AddConstraint("Pony", gt_constraint),
+            ],
+            [
+                migrations.CreateModel(
+                    name="Pony",
+                    fields=[
+                        ("weight", models.IntegerField()),
+                    ],
+                    options={"constraints": [gt_constraint]},
+                ),
+            ],
+        )
+
+    def test_create_model_remove_constraint(self):
+        self.assertOptimizesTo(
+            [
+                migrations.CreateModel(
+                    name="Pony",
+                    fields=[
+                        ("weight", models.IntegerField()),
+                    ],
+                    options={
+                        "constraints": [
+                            models.CheckConstraint(
+                                condition=models.Q(weight__gt=0),
+                                name="pony_weight_gt_0",
+                            ),
+                            models.UniqueConstraint(
+                                "weight", name="pony_weight_unique"
+                            ),
+                        ],
+                    },
+                ),
+                migrations.RemoveConstraint("Pony", "pony_weight_gt_0"),
+            ],
+            [
+                migrations.CreateModel(
+                    name="Pony",
+                    fields=[
+                        ("weight", models.IntegerField()),
+                    ],
+                    options={
+                        "constraints": [
+                            models.UniqueConstraint(
+                                "weight", name="pony_weight_unique"
+                            ),
+                        ]
+                    },
+                ),
+            ],
         )

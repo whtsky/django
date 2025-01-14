@@ -18,7 +18,7 @@ The first defense against CSRF attacks is to ensure that GET requests (and other
 Requests via 'unsafe' methods, such as POST, PUT, and DELETE, can then be
 protected by the steps outlined in :ref:`using-csrf`.
 
-.. _Cross Site Request Forgeries: https://www.squarefree.com/securitytips/web-developers.html#CSRF
+.. _Cross Site Request Forgeries: https://owasp.org/www-community/attacks/csrf#overview
 
 .. _how-csrf-works:
 
@@ -43,7 +43,7 @@ The CSRF protection is based on the following things:
    a mask. The mask is generated randomly on every call to ``get_token()``, so
    the form field value is different each time.
 
-   This part is done by the template tag.
+   This part is done by the :ttag:`csrf_token` template tag.
 
 #. For all incoming requests that are not using HTTP GET, HEAD, OPTIONS or
    TRACE, a CSRF cookie must be present, and the 'csrfmiddlewaretoken' field
@@ -145,18 +145,21 @@ class-based views<decorating-class-based-views>`.
         from django.http import HttpResponse
         from django.views.decorators.csrf import csrf_exempt
 
+
         @csrf_exempt
         def my_view(request):
-            return HttpResponse('Hello world')
+            return HttpResponse("Hello world")
 
 .. function:: csrf_protect(view)
 
-    Decorator that provides the protection of ``CsrfViewMiddleware`` to a view.
+    Decorator that provides the protection of
+    :class:`~django.middleware.csrf.CsrfViewMiddleware` to a view.
 
     Usage::
 
         from django.shortcuts import render
         from django.views.decorators.csrf import csrf_protect
+
 
         @csrf_protect
         def my_view(request):
@@ -176,6 +179,7 @@ class-based views<decorating-class-based-views>`.
 
         from django.shortcuts import render
         from django.views.decorators.csrf import requires_csrf_token
+
 
         @requires_csrf_token
         def my_view(request):

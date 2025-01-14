@@ -53,15 +53,13 @@ The ``trigram_word_similar`` lookup can be used on
 
 .. code-block:: pycon
 
-    >>> Sentence.objects.filter(name__trigram_word_similar='Middlesborough')
+    >>> Sentence.objects.filter(name__trigram_word_similar="Middlesborough")
     ['<Sentence: Gumby rides on the path of Middlesbrough>']
 
 .. fieldlookup:: trigram_strict_word_similar
 
 ``trigram_strict_word_similar``
 -------------------------------
-
-.. versionadded:: 4.2
 
 Similar to :lookup:`trigram_word_similar`, except that it forces extent
 boundaries to match word boundaries.

@@ -8,6 +8,7 @@ from django.db import models
 from django.test import SimpleTestCase, TestCase, skipUnlessDBFeature
 from django.test.utils import isolate_apps
 from django.utils import translation
+from django.utils.deprecation import RemovedInDjango60Warning
 
 from .models import (
     Article,
@@ -221,6 +222,13 @@ class MultiColumnFKTests(TestCase):
             ),
             [m2],
         )
+
+    def test_query_does_not_mutate(self):
+        """
+        Recompiling the same subquery doesn't mutate it.
+        """
+        queryset = Friendship.objects.filter(to_friend__in=Person.objects.all())
+        self.assertEqual(str(queryset.query), str(queryset.query))
 
     def test_select_related_foreignkey_forward_works(self):
         Membership.objects.create(
@@ -508,18 +516,35 @@ class MultiColumnFKTests(TestCase):
 
     def test_isnull_lookup(self):
         m1 = Membership.objects.create(
-            membership_country=self.usa, person=self.bob, group_id=None
+            person_id=self.bob.id,
+            membership_country_id=self.usa.id,
+            group_id=None,
         )
         m2 = Membership.objects.create(
-            membership_country=self.usa, person=self.bob, group=self.cia
+            person_id=self.jim.id,
+            membership_country_id=None,
+            group_id=self.cia.id,
         )
+        m3 = Membership.objects.create(
+            person_id=self.jane.id,
+            membership_country_id=None,
+            group_id=None,
+        )
+        m4 = Membership.objects.create(
+            person_id=self.george.id,
+            membership_country_id=self.soviet_union.id,
+            group_id=self.kgb.id,
+        )
+        for member in [m1, m2, m3]:
+            with self.assertRaises(Membership.group.RelatedObjectDoesNotExist):
+                getattr(member, "group")
         self.assertSequenceEqual(
             Membership.objects.filter(group__isnull=True),
-            [m1],
+            [m1, m2, m3],
         )
         self.assertSequenceEqual(
             Membership.objects.filter(group__isnull=False),
-            [m2],
+            [m4],
         )
 
 
@@ -687,3 +712,52 @@ class TestCachedPathInfo(TestCase):
         foreign_object_restored = pickle.loads(pickle.dumps(foreign_object))
         self.assertIn("path_infos", foreign_object_restored.__dict__)
         self.assertIn("reverse_path_infos", foreign_object_restored.__dict__)
+
+
+class GetJoiningDeprecationTests(TestCase):
+    def test_foreign_object_get_joining_columns_warning(self):
+        msg = (
+            "ForeignObject.get_joining_columns() is deprecated. Use "
+            "get_joining_fields() instead."
+        )
+        with self.assertWarnsMessage(RemovedInDjango60Warning, msg) as ctx:
+            Membership.person.field.get_joining_columns()
+        self.assertEqual(ctx.filename, __file__)
+
+    def test_foreign_object_get_reverse_joining_columns_warning(self):
+        msg = (
+            "ForeignObject.get_reverse_joining_columns() is deprecated. Use "
+            "get_reverse_joining_fields() instead."
+        )
+        with self.assertWarnsMessage(RemovedInDjango60Warning, msg) as ctx:
+            Membership.person.field.get_reverse_joining_columns()
+        self.assertEqual(ctx.filename, __file__)
+
+    def test_foreign_object_rel_get_joining_columns_warning(self):
+        msg = (
+            "ForeignObjectRel.get_joining_columns() is deprecated. Use "
+            "get_joining_fields() instead."
+        )
+        with self.assertWarnsMessage(RemovedInDjango60Warning, msg) as ctx:
+            Membership.person.field.remote_field.get_joining_columns()
+        self.assertEqual(ctx.filename, __file__)
+
+    def test_join_get_joining_columns_warning(self):
+        class CustomForeignKey(models.ForeignKey):
+            def __getattribute__(self, attr):
+                if attr == "get_joining_fields":
+                    raise AttributeError
+                return super().__getattribute__(attr)
+
+        class CustomParent(models.Model):
+            value = models.CharField(max_length=255)
+
+        class CustomChild(models.Model):
+            links = CustomForeignKey(CustomParent, models.CASCADE)
+
+        msg = (
+            "The usage of get_joining_columns() in Join is deprecated. Implement "
+            "get_joining_fields() instead."
+        )
+        with self.assertWarnsMessage(RemovedInDjango60Warning, msg):
+            CustomChild.objects.filter(links__value="value")

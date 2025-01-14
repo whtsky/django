@@ -3,7 +3,7 @@ from django.contrib.auth.admin import UserAdmin
 from django.contrib.auth.models import User
 from django.core.paginator import Paginator
 
-from .models import Band, Child, Event, Parent, ProxyUser, Swallow
+from .models import Band, Child, Event, Genre, GrandChild, Parent, ProxyUser, Swallow
 
 site = admin.AdminSite(name="admin")
 
@@ -48,9 +48,18 @@ class ChildAdmin(admin.ModelAdmin):
     list_display = ["name", "parent"]
     list_per_page = 10
     list_filter = ["parent", "age"]
+    search_fields = ["age__exact", "name__exact"]
 
     def get_queryset(self, request):
         return super().get_queryset(request).select_related("parent")
+
+
+class GrandChildAdmin(admin.ModelAdmin):
+    list_display = ["name", "parent__name", "parent__parent__name"]
+    search_fields = ["parent__name__exact", "parent__age__exact"]
+
+
+site.register(GrandChild, GrandChildAdmin)
 
 
 class CustomPaginationAdmin(ChildAdmin):
@@ -146,6 +155,14 @@ class NoListDisplayLinksParentAdmin(admin.ModelAdmin):
 
 
 site.register(Parent, NoListDisplayLinksParentAdmin)
+
+
+class ListDisplayLinksGenreAdmin(admin.ModelAdmin):
+    list_display = ["name", "file", "url"]
+    list_display_links = ["file", "url"]
+
+
+site.register(Genre, ListDisplayLinksGenreAdmin)
 
 
 class SwallowAdmin(admin.ModelAdmin):

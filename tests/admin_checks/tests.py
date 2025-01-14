@@ -276,8 +276,7 @@ class SystemChecksTestCase(SimpleTestCase):
         class MyBookAdmin(admin.ModelAdmin):
             def check(self, **kwargs):
                 errors = super().check(**kwargs)
-                author_admin = self.admin_site._registry.get(Author)
-                if author_admin is None:
+                if not self.admin_site.is_registered(Author):
                     errors.append("AuthorAdmin missing!")
                 return errors
 
@@ -798,8 +797,9 @@ class SystemChecksTestCase(SimpleTestCase):
         errors = SongAdmin(Song, AdminSite()).check()
         expected = [
             checks.Error(
-                "The value of 'readonly_fields[1]' is not a callable, an attribute "
-                "of 'SongAdmin', or an attribute of 'admin_checks.Song'.",
+                "The value of 'readonly_fields[1]' refers to 'nonexistent', which is "
+                "not a callable, an attribute of 'SongAdmin', or an attribute of "
+                "'admin_checks.Song'.",
                 obj=SongAdmin,
                 id="admin.E035",
             )
@@ -814,8 +814,9 @@ class SystemChecksTestCase(SimpleTestCase):
         errors = CityInline(State, AdminSite()).check()
         expected = [
             checks.Error(
-                "The value of 'readonly_fields[0]' is not a callable, an attribute "
-                "of 'CityInline', or an attribute of 'admin_checks.City'.",
+                "The value of 'readonly_fields[0]' refers to 'i_dont_exist', which is "
+                "not a callable, an attribute of 'CityInline', or an attribute of "
+                "'admin_checks.City'.",
                 obj=CityInline,
                 id="admin.E035",
             )
@@ -1008,3 +1009,26 @@ class SystemChecksTestCase(SimpleTestCase):
             self.assertEqual(errors, [])
         finally:
             Book._meta.apps.ready = True
+
+    def test_related_field_list_display(self):
+        class SongAdmin(admin.ModelAdmin):
+            list_display = ["pk", "original_release", "album__title"]
+
+        errors = SongAdmin(Song, AdminSite()).check()
+        self.assertEqual(errors, [])
+
+    def test_related_field_list_display_wrong_field(self):
+        class SongAdmin(admin.ModelAdmin):
+            list_display = ["pk", "original_release", "album__hello"]
+
+        errors = SongAdmin(Song, AdminSite()).check()
+        expected = [
+            checks.Error(
+                "The value of 'list_display[2]' refers to 'album__hello', which is not "
+                "a callable or attribute of 'SongAdmin', or an attribute, method, or "
+                "field on 'admin_checks.Song'.",
+                obj=SongAdmin,
+                id="admin.E108",
+            )
+        ]
+        self.assertEqual(errors, expected)
