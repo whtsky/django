@@ -38,8 +38,8 @@ class URLFieldTest(FormFieldAssertionsMixin, SimpleTestCase):
                 "http://example.com?some_param=some_value",
                 "http://example.com?some_param=some_value",
             ),
-            ("valid-with-hyphens.com", "http://valid-with-hyphens.com"),
-            ("subdomain.domain.com", "http://subdomain.domain.com"),
+            ("valid-with-hyphens.com", "https://valid-with-hyphens.com"),
+            ("subdomain.domain.com", "https://subdomain.domain.com"),
             ("http://200.8.9.10", "http://200.8.9.10"),
             ("http://200.8.9.10:8000/test", "http://200.8.9.10:8000/test"),
             ("http://valid-----hyphens.com", "http://valid-----hyphens.com"),
@@ -49,7 +49,7 @@ class URLFieldTest(FormFieldAssertionsMixin, SimpleTestCase):
             ),
             (
                 "www.example.com/s/http://code.djangoproject.com/ticket/13804",
-                "http://www.example.com/s/http://code.djangoproject.com/ticket/13804",
+                "https://www.example.com/s/http://code.djangoproject.com/ticket/13804",
             ),
             # Normalization.
             ("http://example.com/     ", "http://example.com/"),
@@ -132,6 +132,14 @@ class URLFieldTest(FormFieldAssertionsMixin, SimpleTestCase):
         self.assertIsNone(f.clean(None))
 
     def test_urlfield_unable_to_set_strip_kwarg(self):
-        msg = "__init__() got multiple values for keyword argument 'strip'"
+        msg = "got multiple values for keyword argument 'strip'"
         with self.assertRaisesMessage(TypeError, msg):
             URLField(strip=False)
+
+    def test_urlfield_assume_scheme(self):
+        f = URLField()
+        self.assertEqual(f.clean("example.com"), "https://example.com")
+        f = URLField(assume_scheme="http")
+        self.assertEqual(f.clean("example.com"), "http://example.com")
+        f = URLField(assume_scheme="https")
+        self.assertEqual(f.clean("example.com"), "https://example.com")

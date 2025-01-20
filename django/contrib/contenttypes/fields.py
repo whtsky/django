@@ -10,6 +10,7 @@ from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
 from django.db import DEFAULT_DB_ALIAS, models, router, transaction
 from django.db.models import DO_NOTHING, ForeignObject, ForeignObjectRel
 from django.db.models.base import ModelBase, make_foreign_order_accessors
+from django.db.models.fields import Field
 from django.db.models.fields.mixins import FieldCacheMixin
 from django.db.models.fields.related import (
     ReverseManyToOneDescriptor,
@@ -22,7 +23,7 @@ from django.db.models.utils import AltersData
 from django.utils.functional import cached_property
 
 
-class GenericForeignKey(FieldCacheMixin):
+class GenericForeignKey(FieldCacheMixin, Field):
     """
     Provide a generic many-to-one relation through the ``content_type`` and
     ``object_id`` fields.
@@ -31,35 +32,28 @@ class GenericForeignKey(FieldCacheMixin):
     ForwardManyToOneDescriptor) by adding itself as a model attribute.
     """
 
-    # Field flags
-    auto_created = False
-    concrete = False
-    editable = False
-    hidden = False
-
-    is_relation = True
     many_to_many = False
     many_to_one = True
     one_to_many = False
     one_to_one = False
-    related_model = None
-    remote_field = None
 
     def __init__(
         self, ct_field="content_type", fk_field="object_id", for_concrete_model=True
     ):
+        super().__init__(editable=False)
         self.ct_field = ct_field
         self.fk_field = fk_field
         self.for_concrete_model = for_concrete_model
-        self.editable = False
-        self.rel = None
-        self.column = None
+        self.is_relation = True
 
     def contribute_to_class(self, cls, name, **kwargs):
-        self.name = name
-        self.model = cls
-        cls._meta.add_field(self, private=True)
-        setattr(cls, name, self)
+        super().contribute_to_class(cls, name, private_only=True, **kwargs)
+        # GenericForeignKey is its own descriptor.
+        setattr(cls, self.attname, self)
+
+    def get_attname_column(self):
+        attname, column = super().get_attname_column()
+        return attname, None
 
     def get_filter_kwargs_for_object(self, obj):
         """See corresponding method on Field"""
@@ -75,28 +69,12 @@ class GenericForeignKey(FieldCacheMixin):
             self.ct_field: ContentType.objects.get_for_model(obj).pk,
         }
 
-    def __str__(self):
-        model = self.model
-        return "%s.%s" % (model._meta.label, self.name)
-
     def check(self, **kwargs):
         return [
             *self._check_field_name(),
             *self._check_object_id_field(),
             *self._check_content_type_field(),
         ]
-
-    def _check_field_name(self):
-        if self.name.endswith("_"):
-            return [
-                checks.Error(
-                    "Field names must not end with an underscore.",
-                    obj=self,
-                    id="fields.E001",
-                )
-            ]
-        else:
-            return []
 
     def _check_object_id_field(self):
         try:
@@ -160,30 +138,44 @@ class GenericForeignKey(FieldCacheMixin):
             else:
                 return []
 
-    def get_cache_name(self):
+    @cached_property
+    def cache_name(self):
         return self.name
 
-    def get_content_type(self, obj=None, id=None, using=None):
+    def get_content_type(self, obj=None, id=None, using=None, model=None):
         if obj is not None:
             return ContentType.objects.db_manager(obj._state.db).get_for_model(
                 obj, for_concrete_model=self.for_concrete_model
             )
         elif id is not None:
             return ContentType.objects.db_manager(using).get_for_id(id)
+        elif model is not None:
+            return ContentType.objects.db_manager(using).get_for_model(
+                model, for_concrete_model=self.for_concrete_model
+            )
         else:
             # This should never happen. I love comments like this, don't you?
             raise Exception("Impossible arguments to GFK.get_content_type!")
 
-    def get_prefetch_queryset(self, instances, queryset=None):
-        if queryset is not None:
-            raise ValueError("Custom queryset can't be used for this lookup.")
+    def get_prefetch_querysets(self, instances, querysets=None):
+        custom_queryset_dict = {}
+        if querysets is not None:
+            for queryset in querysets:
+                ct_id = self.get_content_type(
+                    model=queryset.query.model, using=queryset.db
+                ).pk
+                if ct_id in custom_queryset_dict:
+                    raise ValueError(
+                        "Only one queryset is allowed for each content type."
+                    )
+                custom_queryset_dict[ct_id] = queryset
 
         # For efficiency, group the instances by content type and then do one
         # query per model
         fk_dict = defaultdict(set)
         # We need one instance for each group in order to get the right db:
         instance_dict = {}
-        ct_attname = self.model._meta.get_field(self.ct_field).get_attname()
+        ct_attname = self.model._meta.get_field(self.ct_field).attname
         for instance in instances:
             # We avoid looking for values if either ct_id or fkey value is None
             ct_id = getattr(instance, ct_attname)
@@ -195,9 +187,13 @@ class GenericForeignKey(FieldCacheMixin):
 
         ret_val = []
         for ct_id, fkeys in fk_dict.items():
-            instance = instance_dict[ct_id]
-            ct = self.get_content_type(id=ct_id, using=instance._state.db)
-            ret_val.extend(ct.get_all_objects_for_this_type(pk__in=fkeys))
+            if ct_id in custom_queryset_dict:
+                # Return values from the custom queryset, if provided.
+                ret_val.extend(custom_queryset_dict[ct_id].filter(pk__in=fkeys))
+            else:
+                instance = instance_dict[ct_id]
+                ct = self.get_content_type(id=ct_id, using=instance._state.db)
+                ret_val.extend(ct.get_all_objects_for_this_type(pk__in=fkeys))
 
         # For doing the join in Python, we have to match both the FK val and the
         # content type, so we use a callable that returns a (fk, class) pair.
@@ -232,7 +228,7 @@ class GenericForeignKey(FieldCacheMixin):
         # content type ID here, and later when the actual instance is needed,
         # use ContentType.objects.get_for_id(), which has a global cache.
         f = self.model._meta.get_field(self.ct_field)
-        ct_id = getattr(instance, f.get_attname(), None)
+        ct_id = getattr(instance, f.attname, None)
         pk_val = getattr(instance, self.fk_field)
 
         rel_obj = self.get_cached_value(instance, default=None)
@@ -242,15 +238,17 @@ class GenericForeignKey(FieldCacheMixin):
             ct_match = (
                 ct_id == self.get_content_type(obj=rel_obj, using=instance._state.db).id
             )
-            pk_match = rel_obj._meta.pk.to_python(pk_val) == rel_obj.pk
-            if ct_match and pk_match:
+            pk_match = ct_match and rel_obj._meta.pk.to_python(pk_val) == rel_obj.pk
+            if pk_match:
                 return rel_obj
             else:
                 rel_obj = None
         if ct_id is not None:
             ct = self.get_content_type(id=ct_id, using=instance._state.db)
             try:
-                rel_obj = ct.get_object_for_this_type(pk=pk_val)
+                rel_obj = ct.get_object_for_this_type(
+                    using=instance._state.db, pk=pk_val
+                )
             except ObjectDoesNotExist:
                 pass
         self.set_cached_value(instance, rel_obj)
@@ -615,10 +613,13 @@ def create_generic_related_manager(superclass, rel):
                 queryset = super().get_queryset()
                 return self._apply_rel_filters(queryset)
 
-        def get_prefetch_queryset(self, instances, queryset=None):
-            if queryset is None:
-                queryset = super().get_queryset()
-
+        def get_prefetch_querysets(self, instances, querysets=None):
+            if querysets and len(querysets) != 1:
+                raise ValueError(
+                    "querysets argument of get_prefetch_querysets() should have a "
+                    "length of 1."
+                )
+            queryset = querysets[0] if querysets else super().get_queryset()
             queryset._add_hints(instance=instances[0])
             queryset = queryset.using(queryset._db or self._db)
             # Group instances by content types.

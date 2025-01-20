@@ -1,11 +1,32 @@
 import operator
+from datetime import datetime
 
 from django.db import DatabaseError, NotSupportedError, connection
-from django.db.models import Exists, F, IntegerField, OuterRef, Subquery, Value
+from django.db.models import (
+    DateTimeField,
+    Exists,
+    F,
+    IntegerField,
+    OuterRef,
+    Subquery,
+    Transform,
+    Value,
+)
+from django.db.models.functions import Cast, Mod
 from django.test import TestCase, skipIfDBFeature, skipUnlessDBFeature
 from django.test.utils import CaptureQueriesContext
 
-from .models import Author, Celebrity, ExtraInfo, Number, ReservedName
+from .models import (
+    Annotation,
+    Article,
+    Author,
+    Celebrity,
+    ExtraInfo,
+    Note,
+    Number,
+    ReservedName,
+    Tag,
+)
 
 
 @skipUnlessDBFeature("supports_select_union")
@@ -66,6 +87,12 @@ class QuerySetSetOperationTests(TestCase):
         qs2 = Number.objects.none()
         qs3 = qs1.union(qs2)
         self.assertNumbersEqual(qs3[:1], [0])
+
+    def test_union_all_none_slice(self):
+        qs = Number.objects.filter(id__in=[])
+        with self.assertNumQueries(0):
+            self.assertSequenceEqual(qs.union(qs), [])
+            self.assertSequenceEqual(qs.union(qs)[0:0], [])
 
     def test_union_empty_filter_slice(self):
         qs1 = Number.objects.filter(num__lte=0)
@@ -246,7 +273,24 @@ class QuerySetSetOperationTests(TestCase):
             )
             .values_list("num", "count")
         )
-        self.assertCountEqual(qs1.union(qs2), [(1, 0), (2, 1)])
+        self.assertCountEqual(qs1.union(qs2), [(1, 0), (1, 2)])
+
+    def test_union_with_field_and_annotation_values(self):
+        qs1 = (
+            Number.objects.filter(num=1)
+            .annotate(
+                zero=Value(0, IntegerField()),
+            )
+            .values_list("num", "zero")
+        )
+        qs2 = (
+            Number.objects.filter(num=2)
+            .annotate(
+                zero=Value(0, IntegerField()),
+            )
+            .values_list("zero", "num")
+        )
+        self.assertCountEqual(qs1.union(qs2), [(1, 0), (0, 2)])
 
     def test_union_with_extra_and_values_list(self):
         qs1 = (
@@ -322,6 +366,23 @@ class QuerySetSetOperationTests(TestCase):
             operator.itemgetter("num"),
         )
 
+    def test_order_by_annotation_transform(self):
+        class Mod2(Mod, Transform):
+            def __init__(self, expr):
+                super().__init__(expr, 2)
+
+        output_field = IntegerField()
+        output_field.register_lookup(Mod2, "mod2")
+        qs1 = Number.objects.annotate(
+            annotation=Value(1, output_field=output_field),
+        )
+        qs2 = Number.objects.annotate(
+            annotation=Value(2, output_field=output_field),
+        )
+        msg = "Ordering combined queries by transforms is not implemented."
+        with self.assertRaisesMessage(NotImplementedError, msg):
+            list(qs1.union(qs2).order_by("annotation__mod2"))
+
     def test_union_with_select_related_and_order(self):
         e1 = ExtraInfo.objects.create(value=7, info="e1")
         a1 = Author.objects.create(name="a1", num=1, extra=e1)
@@ -368,6 +429,53 @@ class QuerySetSetOperationTests(TestCase):
             [reserved_name.pk],
         )
 
+    def test_union_multiple_models_with_values_list_and_annotations(self):
+        ReservedName.objects.create(name="rn1", order=10)
+        Celebrity.objects.create(name="c1")
+        qs1 = ReservedName.objects.annotate(row_type=Value("rn")).values_list(
+            "name", "order", "row_type"
+        )
+        qs2 = Celebrity.objects.annotate(
+            row_type=Value("cb"), order=Value(-10)
+        ).values_list("name", "order", "row_type")
+        self.assertSequenceEqual(
+            qs1.union(qs2).order_by("order"),
+            [("c1", -10, "cb"), ("rn1", 10, "rn")],
+        )
+
+    def test_union_multiple_models_with_values_list_and_datetime_annotations(self):
+        gen_x = datetime(1966, 6, 6)
+        Article.objects.create(name="Bellatrix", created=gen_x)
+        column_names = ["name", "created", "order"]
+        qs1 = Article.objects.annotate(order=Value(1)).values_list(*column_names)
+
+        gen_y = datetime(1991, 10, 10)
+        ReservedName.objects.create(name="Rigel", order=2)
+        qs2 = ReservedName.objects.annotate(
+            created=Cast(Value(gen_y), DateTimeField())
+        ).values_list(*column_names)
+
+        expected_result = [("Bellatrix", gen_x, 1), ("Rigel", gen_y, 2)]
+        self.assertEqual(list(qs1.union(qs2).order_by("order")), expected_result)
+
+    def test_union_multiple_models_with_values_and_datetime_annotations(self):
+        gen_x = datetime(1966, 6, 6)
+        Article.objects.create(name="Bellatrix", created=gen_x)
+        column_names = ["name", "created", "order"]
+        qs1 = Article.objects.values(*column_names, order=Value(1))
+
+        gen_y = datetime(1991, 10, 10)
+        ReservedName.objects.create(name="Rigel", order=2)
+        qs2 = ReservedName.objects.values(
+            *column_names, created=Cast(Value(gen_y), DateTimeField())
+        )
+
+        expected_result = [
+            {"name": "Bellatrix", "created": gen_x, "order": 1},
+            {"name": "Rigel", "created": gen_y, "order": 2},
+        ]
+        self.assertEqual(list(qs1.union(qs2).order_by("order")), expected_result)
+
     def test_union_in_subquery(self):
         ReservedName.objects.bulk_create(
             [
@@ -386,6 +494,27 @@ class QuerySetSetOperationTests(TestCase):
             .values_list("order", flat=True),
             [8, 1],
         )
+
+    @skipUnlessDBFeature("supports_select_intersection")
+    def test_intersection_in_nested_subquery(self):
+        tag = Tag.objects.create(name="tag")
+        note = Note.objects.create(tag=tag)
+        annotation = Annotation.objects.create(tag=tag)
+        tags = Tag.objects.order_by()
+        tags = tags.filter(id=OuterRef("tag_id")).intersection(
+            tags.filter(id=OuterRef(OuterRef("tag_id")))
+        )
+        qs = Note.objects.filter(
+            Exists(
+                Annotation.objects.filter(
+                    Exists(tags),
+                    notes__in=OuterRef("pk"),
+                )
+            )
+        )
+        self.assertIsNone(qs.first())
+        annotation.notes.add(note)
+        self.assertEqual(qs.first(), note)
 
     def test_union_in_subquery_related_outerref(self):
         e1 = ExtraInfo.objects.create(value=7, info="e3")

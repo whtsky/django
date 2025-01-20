@@ -5,6 +5,8 @@ from django.conf import settings
 from django.contrib import admin
 from django.contrib.admindocs import utils, views
 from django.contrib.admindocs.views import get_return_data_type, simplify_regex
+from django.contrib.auth.models import Permission, User
+from django.contrib.contenttypes.models import ContentType
 from django.contrib.sites.models import Site
 from django.db import models
 from django.db.models import fields
@@ -27,7 +29,7 @@ class AdminDocViewTests(TestDataMixin, AdminDocsTestCase):
         self.assertContains(response, "<h1>Documentation</h1>", html=True)
         self.assertContains(
             response,
-            '<h1 id="site-name"><a href="/admin/">Django administration</a></h1>',
+            '<div id="site-name"><a href="/admin/">Django administration</a></div>',
         )
         self.client.logout()
         response = self.client.get(reverse("django-admindocs-docroot"), follow=True)
@@ -89,6 +91,18 @@ class AdminDocViewTests(TestDataMixin, AdminDocsTestCase):
         # View docstring
         self.assertContains(response, "Base view for admindocs views.")
 
+    def testview_docstring_links(self):
+        summary = (
+            '<h2 class="subhead">This is a view for '
+            '<a class="reference external" href="/admindocs/models/myapp.company/">'
+            "myapp.Company</a></h2>"
+        )
+        url = reverse(
+            "django-admindocs-views-detail", args=["admin_docs.views.CompanyView"]
+        )
+        response = self.client.get(url)
+        self.assertContains(response, summary, html=True)
+
     @override_settings(ROOT_URLCONF="admin_docs.namespace_urls")
     def test_namespaced_view_detail(self):
         url = reverse(
@@ -138,6 +152,12 @@ class AdminDocViewTests(TestDataMixin, AdminDocsTestCase):
             html=True,
         )
 
+    def test_template_detail_loader(self):
+        response = self.client.get(
+            reverse("django-admindocs-templates", args=["view_for_loader_test.html"])
+        )
+        self.assertContains(response, "view_for_loader_test.html</code></li>")
+
     def test_missing_docutils(self):
         utils.docutils_is_available = False
         try:
@@ -148,12 +168,12 @@ class AdminDocViewTests(TestDataMixin, AdminDocsTestCase):
                 '<a href="https://docutils.sourceforge.io/">docutils</a> '
                 "library.</h3>"
                 "<p>Please ask your administrators to install "
-                '<a href="https://docutils.sourceforge.io/">docutils</a>.</p>',
+                '<a href="https://pypi.org/project/docutils/">docutils</a>.</p>',
                 html=True,
             )
             self.assertContains(
                 response,
-                '<h1 id="site-name"><a href="/admin/">Django administration</a></h1>',
+                '<div id="site-name"><a href="/admin/">Django administration</a></div>',
             )
         finally:
             utils.docutils_is_available = True
@@ -240,6 +260,20 @@ class TestModelDetailView(TestDataMixin, AdminDocsTestCase):
                 reverse("django-admindocs-models-detail", args=["admin_docs", "Person"])
             )
 
+    def test_table_headers(self):
+        tests = [
+            ("Method", 1),
+            ("Arguments", 1),
+            ("Description", 2),
+            ("Field", 1),
+            ("Type", 1),
+            ("Method", 1),
+        ]
+        for table_header, count in tests:
+            self.assertContains(
+                self.response, f'<th scope="col">{table_header}</th>', count=count
+            )
+
     def test_method_excludes(self):
         """
         Methods that begin with strings defined in
@@ -260,6 +294,8 @@ class TestModelDetailView(TestDataMixin, AdminDocsTestCase):
         self.assertContains(self.response, "<h3>Methods with arguments</h3>")
         self.assertContains(self.response, "<td>rename_company</td>")
         self.assertContains(self.response, "<td>dummy_function</td>")
+        self.assertContains(self.response, "<td>dummy_function_keyword_only_arg</td>")
+        self.assertContains(self.response, "<td>all_kinds_arg_function</td>")
         self.assertContains(self.response, "<td>suffix_company_name</td>")
 
     def test_methods_with_arguments_display_arguments(self):
@@ -267,6 +303,7 @@ class TestModelDetailView(TestDataMixin, AdminDocsTestCase):
         Methods with arguments should have their arguments displayed.
         """
         self.assertContains(self.response, "<td>new_name</td>")
+        self.assertContains(self.response, "<td>keyword_only_arg</td>")
 
     def test_methods_with_arguments_display_arguments_default_value(self):
         """
@@ -282,6 +319,7 @@ class TestModelDetailView(TestDataMixin, AdminDocsTestCase):
         self.assertContains(
             self.response, "<td>baz, rox, *some_args, **some_kwargs</td>"
         )
+        self.assertContains(self.response, "<td>position_only_arg, arg, kwarg</td>")
 
     def test_instance_of_property_methods_are_displayed(self):
         """Model properties are displayed as fields."""
@@ -384,9 +422,9 @@ class TestModelDetailView(TestDataMixin, AdminDocsTestCase):
 
     def test_model_docstring_renders_correctly(self):
         summary = (
-            '<h2 class="subhead"><p>Stores information about a person, related to '
+            '<h2 class="subhead">Stores information about a person, related to '
             '<a class="reference external" href="/admindocs/models/myapp.company/">'
-            "myapp.Company</a>.</p></h2>"
+            "myapp.Company</a>.</h2>"
         )
         subheading = "<p><strong>Notes</strong></p>"
         body = (
@@ -404,6 +442,25 @@ class TestModelDetailView(TestDataMixin, AdminDocsTestCase):
         self.assertContains(self.response, subheading, html=True)
         self.assertContains(self.response, body, html=True)
         self.assertContains(self.response, model_body, html=True)
+
+    def test_model_docstring_built_in_tag_links(self):
+        summary = "Links with different link text."
+        body = (
+            '<p>This is a line with tag <a class="reference external" '
+            'href="/admindocs/tags/#built_in-extends">extends</a>\n'
+            'This is a line with model <a class="reference external" '
+            'href="/admindocs/models/myapp.family/">Family</a>\n'
+            'This is a line with view <a class="reference external" '
+            'href="/admindocs/views/myapp.views.Index/">Index</a>\n'
+            'This is a line with template <a class="reference external" '
+            'href="/admindocs/templates/Index.html/">index template</a>\n'
+            'This is a line with filter <a class="reference external" '
+            'href="/admindocs/filters/#filtername">example filter</a></p>'
+        )
+        url = reverse("django-admindocs-models-detail", args=["admin_docs", "family"])
+        response = self.client.get(url)
+        self.assertContains(response, summary, html=True)
+        self.assertContains(response, body, html=True)
 
     def test_model_detail_title(self):
         self.assertContains(self.response, "<h1>admin_docs.Person</h1>", html=True)
@@ -426,6 +483,110 @@ class TestModelDetailView(TestDataMixin, AdminDocsTestCase):
             "Model 'doesnotexist' not found in app 'admin_docs'",
         )
         self.assertEqual(response.status_code, 404)
+
+    def test_model_permission_denied(self):
+        person_url = reverse(
+            "django-admindocs-models-detail", args=["admin_docs", "person"]
+        )
+        company_url = reverse(
+            "django-admindocs-models-detail", args=["admin_docs", "company"]
+        )
+        staff_user = User.objects.create_user(
+            username="staff", password="secret", is_staff=True
+        )
+        self.client.force_login(staff_user)
+        response_for_person = self.client.get(person_url)
+        response_for_company = self.client.get(company_url)
+        # No access without permissions.
+        self.assertEqual(response_for_person.status_code, 403)
+        self.assertEqual(response_for_company.status_code, 403)
+        company_content_type = ContentType.objects.get_for_model(Company)
+        person_content_type = ContentType.objects.get_for_model(Person)
+        view_company = Permission.objects.get(
+            codename="view_company", content_type=company_content_type
+        )
+        change_person = Permission.objects.get(
+            codename="change_person", content_type=person_content_type
+        )
+        staff_user.user_permissions.add(view_company, change_person)
+        response_for_person = self.client.get(person_url)
+        response_for_company = self.client.get(company_url)
+        # View or change permission grants access.
+        self.assertEqual(response_for_person.status_code, 200)
+        self.assertEqual(response_for_company.status_code, 200)
+
+
+@unittest.skipUnless(utils.docutils_is_available, "no docutils installed.")
+class TestModelIndexView(TestDataMixin, AdminDocsTestCase):
+    def test_model_index_superuser(self):
+        self.client.force_login(self.superuser)
+        index_url = reverse("django-admindocs-models-index")
+        response = self.client.get(index_url)
+        self.assertContains(
+            response,
+            '<a href="/admindocs/models/admin_docs.family/">Family</a>',
+            html=True,
+        )
+        self.assertContains(
+            response,
+            '<a href="/admindocs/models/admin_docs.person/">Person</a>',
+            html=True,
+        )
+        self.assertContains(
+            response,
+            '<a href="/admindocs/models/admin_docs.company/">Company</a>',
+            html=True,
+        )
+
+    def test_model_index_with_model_permission(self):
+        staff_user = User.objects.create_user(
+            username="staff", password="secret", is_staff=True
+        )
+        self.client.force_login(staff_user)
+        index_url = reverse("django-admindocs-models-index")
+        response = self.client.get(index_url)
+        # Models are not listed without permissions.
+        self.assertNotContains(
+            response,
+            '<a href="/admindocs/models/admin_docs.family/">Family</a>',
+            html=True,
+        )
+        self.assertNotContains(
+            response,
+            '<a href="/admindocs/models/admin_docs.person/">Person</a>',
+            html=True,
+        )
+        self.assertNotContains(
+            response,
+            '<a href="/admindocs/models/admin_docs.company/">Company</a>',
+            html=True,
+        )
+        company_content_type = ContentType.objects.get_for_model(Company)
+        person_content_type = ContentType.objects.get_for_model(Person)
+        view_company = Permission.objects.get(
+            codename="view_company", content_type=company_content_type
+        )
+        change_person = Permission.objects.get(
+            codename="change_person", content_type=person_content_type
+        )
+        staff_user.user_permissions.add(view_company, change_person)
+        response = self.client.get(index_url)
+        # View or change permission grants access.
+        self.assertNotContains(
+            response,
+            '<a href="/admindocs/models/admin_docs.family/">Family</a>',
+            html=True,
+        )
+        self.assertContains(
+            response,
+            '<a href="/admindocs/models/admin_docs.person/">Person</a>',
+            html=True,
+        )
+        self.assertContains(
+            response,
+            '<a href="/admindocs/models/admin_docs.company/">Company</a>',
+            html=True,
+        )
 
 
 class CustomField(models.Field):

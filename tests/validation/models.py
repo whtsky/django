@@ -48,7 +48,7 @@ class ModelToValidate(models.Model):
 
 class UniqueFieldsModel(models.Model):
     unique_charfield = models.CharField(max_length=100, unique=True)
-    unique_integerfield = models.IntegerField(unique=True)
+    unique_integerfield = models.IntegerField(unique=True, db_default=42)
     non_unique_field = models.IntegerField()
 
 
@@ -173,7 +173,7 @@ class Product(models.Model):
         }
         constraints = [
             models.CheckConstraint(
-                check=models.Q(price__gt=models.F("discounted_price")),
+                condition=models.Q(price__gt=models.F("discounted_price")),
                 name="price_gt_discounted_price_validation",
             ),
         ]

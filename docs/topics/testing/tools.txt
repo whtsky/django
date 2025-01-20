@@ -54,10 +54,10 @@ web pages:
 
     >>> from django.test import Client
     >>> c = Client()
-    >>> response = c.post('/login/', {'username': 'john', 'password': 'smith'})
+    >>> response = c.post("/login/", {"username": "john", "password": "smith"})
     >>> response.status_code
     200
-    >>> response = c.get('/customer/details/')
+    >>> response = c.get("/customer/details/")
     >>> response.content
     b'<!DOCTYPE html...'
 
@@ -76,13 +76,13 @@ Note a few important things about how the test client works:
 
   .. code-block:: pycon
 
-      >>> c.get('/login/')
+      >>> c.get("/login/")
 
   This is incorrect:
 
   .. code-block:: pycon
 
-      >>> c.get('https://www.example.com/login/')
+      >>> c.get("https://www.example.com/login/")
 
   The test client is not capable of retrieving web pages that are not
   powered by your Django project. If you need to retrieve other web pages,
@@ -120,7 +120,7 @@ Making requests
 
 Use the ``django.test.Client`` class to make requests.
 
-.. class:: Client(enforce_csrf_checks=False, raise_request_exception=True, json_encoder=DjangoJSONEncoder, *, headers=None, **defaults)
+.. class:: Client(enforce_csrf_checks=False, raise_request_exception=True, json_encoder=DjangoJSONEncoder, *, headers=None, query_params=None, **defaults)
 
     A testing HTTP client. Takes several arguments that can customize behavior.
 
@@ -128,6 +128,9 @@ Use the ``django.test.Client`` class to make requests.
     every request. For example, to set a ``User-Agent`` header::
 
         client = Client(headers={"user-agent": "curl/7.79.1"})
+
+    ``query_params`` allows you to specify the default query string that will
+    be set on every request.
 
     Arbitrary keyword arguments in ``**defaults`` set WSGI
     :pep:`environ variables <3333#environ-variables>`. For example, to set the
@@ -140,8 +143,8 @@ Use the ``django.test.Client`` class to make requests.
         Keyword arguments starting with a ``HTTP_`` prefix are set as headers,
         but the ``headers`` parameter should be preferred for readability.
 
-    The values from the ``headers`` and ``extra`` keyword arguments passed to
-    :meth:`~django.test.Client.get()`,
+    The values from the ``headers``, ``query_params``, and ``extra`` keyword
+    arguments passed to :meth:`~django.test.Client.get()`,
     :meth:`~django.test.Client.post()`, etc. have precedence over
     the defaults passed to the class constructor.
 
@@ -158,22 +161,18 @@ Use the ``django.test.Client`` class to make requests.
     Once you have a ``Client`` instance, you can call any of the following
     methods:
 
-    .. versionchanged:: 4.2
-
-        The ``headers`` parameter was added.
-
-    .. method:: Client.get(path, data=None, follow=False, secure=False, *, headers=None, **extra)
+    .. method:: Client.get(path, data=None, follow=False, secure=False, *, headers=None, query_params=None, **extra)
 
         Makes a GET request on the provided ``path`` and returns a ``Response``
         object, which is documented below.
 
-        The key-value pairs in the ``data`` dictionary are used to create a GET
-        data payload. For example:
+        The key-value pairs in the ``query_params`` dictionary are used to set
+        query strings. For example:
 
         .. code-block:: pycon
 
             >>> c = Client()
-            >>> c.get('/customers/details/', {'name': 'fred', 'age': 7})
+            >>> c.get("/customers/details/", query_params={"name": "fred", "age": 7})
 
         ...will result in the evaluation of a GET request equivalent to:
 
@@ -181,14 +180,21 @@ Use the ``django.test.Client`` class to make requests.
 
             /customers/details/?name=fred&age=7
 
+        It is also possible to pass these parameters into the ``data``
+        parameter. However, ``query_params`` is preferred as it works for any
+        HTTP method.
+
         The ``headers`` parameter can be used to specify headers to be sent in
         the request. For example:
 
         .. code-block:: pycon
 
             >>> c = Client()
-            >>> c.get('/customers/details/', {'name': 'fred', 'age': 7},
-            ...       headers={'accept': 'application/json'})
+            >>> c.get(
+            ...     "/customers/details/",
+            ...     query_params={"name": "fred", "age": 7},
+            ...     headers={"accept": "application/json"},
+            ... )
 
         ...will send the HTTP header ``HTTP_ACCEPT`` to the details view, which
         is a good way to test code paths that use the
@@ -210,10 +216,10 @@ Use the ``django.test.Client`` class to make requests.
         .. code-block:: pycon
 
             >>> c = Client()
-            >>> c.get('/customers/details/?name=fred&age=7')
+            >>> c.get("/customers/details/?name=fred&age=7")
 
-        If you provide a URL with both an encoded GET data and a data argument,
-        the data argument will take precedence.
+        If you provide a URL with both an encoded GET data and either a
+        query_params or data argument these arguments will take precedence.
 
         If you set ``follow`` to ``True`` the client will follow any redirects
         and a ``redirect_chain`` attribute will be set in the response object
@@ -224,18 +230,14 @@ Use the ``django.test.Client`` class to make requests.
 
         .. code-block:: pycon
 
-            >>> response = c.get('/redirect_me/', follow=True)
+            >>> response = c.get("/redirect_me/", follow=True)
             >>> response.redirect_chain
             [('http://testserver/next/', 302), ('http://testserver/final/', 302)]
 
         If you set ``secure`` to ``True`` the client will emulate an HTTPS
         request.
 
-        .. versionchanged:: 4.2
-
-            The ``headers`` parameter was added.
-
-    .. method:: Client.post(path, data=None, content_type=MULTIPART_CONTENT, follow=False, secure=False, *, headers=None, **extra)
+    .. method:: Client.post(path, data=None, content_type=MULTIPART_CONTENT, follow=False, secure=False, *, headers=None, query_params=None, **extra)
 
         Makes a POST request on the provided ``path`` and returns a
         ``Response`` object, which is documented below.
@@ -246,13 +248,17 @@ Use the ``django.test.Client`` class to make requests.
         .. code-block:: pycon
 
             >>> c = Client()
-            >>> c.post('/login/', {'name': 'fred', 'passwd': 'secret'})
+            >>> c.post("/login/", {"name": "fred", "passwd": "secret"})
 
-        ...will result in the evaluation of a POST request to this URL::
+        ...will result in the evaluation of a POST request to this URL:
+
+        .. code-block:: text
 
             /login/
 
-        ...with this POST data::
+        ...with this POST data:
+
+        .. code-block:: text
 
             name=fred&passwd=secret
 
@@ -280,7 +286,7 @@ Use the ``django.test.Client`` class to make requests.
         list or tuple for the required key. For example, this value of ``data``
         would submit three selected values for the field named ``choices``::
 
-            {'choices': ['a', 'b', 'd']}
+            {"choices": ["a", "b", "d"]}
 
         Submitting files is a special case. To POST a file, you need only
         provide the file field name as a key, and a file handle to the file you
@@ -291,8 +297,9 @@ Use the ``django.test.Client`` class to make requests.
         .. code-block:: pycon
 
             >>> c = Client()
-            >>> with open('wishlist.doc', 'rb') as fp:
-            ...     c.post('/customers/wishes/', {'name': 'fred', 'attachment': fp})
+            >>> with open("wishlist.doc", "rb") as fp:
+            ...     c.post("/customers/wishes/", {"name": "fred", "attachment": fp})
+            ...
 
         You may also provide any file-like object (e.g., :class:`~io.StringIO` or
         :class:`~io.BytesIO`) as a file handle. If you're uploading to an
@@ -321,8 +328,8 @@ Use the ``django.test.Client`` class to make requests.
         such as an image, this means you will need to open the file in
         ``rb`` (read binary) mode.
 
-        The ``headers`` and ``extra`` parameters acts the same as for
-        :meth:`Client.get`.
+        The ``headers``, ``query_params``, and ``extra`` parameters acts the
+        same as for :meth:`Client.get`.
 
         If the URL you request with a POST contains encoded parameters, these
         parameters will be made available in the request.GET data. For example,
@@ -330,7 +337,9 @@ Use the ``django.test.Client`` class to make requests.
 
         .. code-block:: pycon
 
-            >>> c.post('/login/?visitor=true', {'name': 'fred', 'passwd': 'secret'})
+            >>> c.post(
+            ...     "/login/", {"name": "fred", "passwd": "secret"}, query_params={"visitor": "true"}
+            ... )
 
         ... the view handling this request could interrogate request.POST
         to retrieve the username and password, and could interrogate request.GET
@@ -343,22 +352,14 @@ Use the ``django.test.Client`` class to make requests.
         If you set ``secure`` to ``True`` the client will emulate an HTTPS
         request.
 
-        .. versionchanged:: 4.2
-
-            The ``headers`` parameter was added.
-
-    .. method:: Client.head(path, data=None, follow=False, secure=False, *, headers=None, **extra)
+    .. method:: Client.head(path, data=None, follow=False, secure=False, *, headers=None, query_params=None, **extra)
 
         Makes a HEAD request on the provided ``path`` and returns a
         ``Response`` object. This method works just like :meth:`Client.get`,
-        including the ``follow``, ``secure``, ``headers``, and ``extra``
-        parameters, except it does not return a message body.
+        including the ``follow``, ``secure``, ``headers``, ``query_params``,
+        and ``extra`` parameters, except it does not return a message body.
 
-        .. versionchanged:: 4.2
-
-            The ``headers`` parameter was added.
-
-    .. method:: Client.options(path, data='', content_type='application/octet-stream', follow=False, secure=False, *, headers=None, **extra)
+    .. method:: Client.options(path, data='', content_type='application/octet-stream', follow=False, secure=False, *, headers=None, query_params=None, **extra)
 
         Makes an OPTIONS request on the provided ``path`` and returns a
         ``Response`` object. Useful for testing RESTful interfaces.
@@ -366,14 +367,10 @@ Use the ``django.test.Client`` class to make requests.
         When ``data`` is provided, it is used as the request body, and
         a ``Content-Type`` header is set to ``content_type``.
 
-        The ``follow``, ``secure``, ``headers``, and ``extra`` parameters act
-        the same as for :meth:`Client.get`.
+        The ``follow``, ``secure``, ``headers``, ``query_params``, and
+        ``extra`` parameters act the same as for :meth:`Client.get`.
 
-        .. versionchanged:: 4.2
-
-            The ``headers`` parameter was added.
-
-    .. method:: Client.put(path, data='', content_type='application/octet-stream', follow=False, secure=False, *, headers=None, **extra)
+    .. method:: Client.put(path, data='', content_type='application/octet-stream', follow=False, secure=False, *, headers=None, query_params=None, **extra)
 
         Makes a PUT request on the provided ``path`` and returns a
         ``Response`` object. Useful for testing RESTful interfaces.
@@ -381,26 +378,18 @@ Use the ``django.test.Client`` class to make requests.
         When ``data`` is provided, it is used as the request body, and
         a ``Content-Type`` header is set to ``content_type``.
 
-        The ``follow``, ``secure``, ``headers``, and ``extra`` parameters act
-        the same as for :meth:`Client.get`.
+        The ``follow``, ``secure``, ``headers``, ``query_params``, and
+        ``extra`` parameters act the same as for :meth:`Client.get`.
 
-        .. versionchanged:: 4.2
-
-            The ``headers`` parameter was added.
-
-    .. method:: Client.patch(path, data='', content_type='application/octet-stream', follow=False, secure=False, *, headers=None, **extra)
+    .. method:: Client.patch(path, data='', content_type='application/octet-stream', follow=False, secure=False, *, headers=None, query_params=None, **extra)
 
         Makes a PATCH request on the provided ``path`` and returns a
         ``Response`` object. Useful for testing RESTful interfaces.
 
-        The ``follow``, ``secure``, ``headers``, and ``extra`` parameters act
-        the same as for :meth:`Client.get`.
+        The ``follow``, ``secure``, ``headers``, ``query_params``, and
+        ``extra`` parameters act the same as for :meth:`Client.get`.
 
-        .. versionchanged:: 4.2
-
-            The ``headers`` parameter was added.
-
-    .. method:: Client.delete(path, data='', content_type='application/octet-stream', follow=False, secure=False, *, headers=None, **extra)
+    .. method:: Client.delete(path, data='', content_type='application/octet-stream', follow=False, secure=False, *, headers=None, query_params=None, **extra)
 
         Makes a DELETE request on the provided ``path`` and returns a
         ``Response`` object. Useful for testing RESTful interfaces.
@@ -408,14 +397,10 @@ Use the ``django.test.Client`` class to make requests.
         When ``data`` is provided, it is used as the request body, and
         a ``Content-Type`` header is set to ``content_type``.
 
-        The ``follow``, ``secure``, ``headers``, and ``extra`` parameters act
-        the same as for :meth:`Client.get`.
+        The ``follow``, ``secure``, ``headers``, ``query_params``, and
+        ``extra`` parameters act the same as for :meth:`Client.get`.
 
-        .. versionchanged:: 4.2
-
-            The ``headers`` parameter was added.
-
-    .. method:: Client.trace(path, follow=False, secure=False, *, headers=None, **extra)
+    .. method:: Client.trace(path, follow=False, secure=False, *, headers=None, query_params=None, **extra)
 
         Makes a TRACE request on the provided ``path`` and returns a
         ``Response`` object. Useful for simulating diagnostic probes.
@@ -424,14 +409,13 @@ Use the ``django.test.Client`` class to make requests.
         parameter in order to comply with :rfc:`9110#section-9.3.8`, which
         mandates that TRACE requests must not have a body.
 
-        The ``follow``, ``secure``, ``headers``, and ``extra`` parameters act
-        the same as for :meth:`Client.get`.
-
-        .. versionchanged:: 4.2
-
-            The ``headers`` parameter was added.
+        The ``follow``, ``secure``, ``headers``, ``query_params``, and
+        ``extra`` parameters act the same as for :meth:`Client.get`.
 
     .. method:: Client.login(**credentials)
+    .. method:: Client.alogin(**credentials)
+
+        *Asynchronous version*: ``alogin()``
 
         If your site uses Django's :doc:`authentication system</topics/auth/index>`
         and you deal with logging in users, you can use the test client's
@@ -452,7 +436,7 @@ Use the ``django.test.Client`` class to make requests.
         .. code-block:: pycon
 
             >>> c = Client()
-            >>> c.login(username='fred', password='secret')
+            >>> c.login(username="fred", password="secret")
 
             # Now you can access a view that's only available to logged-in users.
 
@@ -478,6 +462,9 @@ Use the ``django.test.Client`` class to make requests.
         method to create a new user with a correctly hashed password.
 
     .. method:: Client.force_login(user, backend=None)
+    .. method:: Client.aforce_login(user, backend=None)
+
+        *Asynchronous version*: ``aforce_login()``
 
         If your site uses Django's :doc:`authentication
         system</topics/auth/index>`, you can use the ``force_login()`` method
@@ -502,6 +489,9 @@ Use the ``django.test.Client`` class to make requests.
         <speeding-up-tests-auth-hashers>`.
 
     .. method:: Client.logout()
+    .. method:: Client.alogout()
+
+        *Asynchronous version*: ``alogout()``
 
         If your site uses Django's :doc:`authentication system</topics/auth/index>`,
         the ``logout()`` method can be used to simulate the effect of a user
@@ -547,8 +537,8 @@ Specifically, a ``Response`` object has the following attributes:
 
         .. code-block:: pycon
 
-            >>> response = client.get('/foo/')
-            >>> response.context['name']
+            >>> response = client.get("/foo/")
+            >>> response.context["name"]
             'Arthur'
 
         .. admonition:: Not using Django templates?
@@ -581,8 +571,8 @@ Specifically, a ``Response`` object has the following attributes:
 
         .. code-block:: pycon
 
-            >>> response = client.get('/foo/')
-            >>> response.json()['name']
+            >>> response = client.get("/foo/")
+            >>> response.json()["name"]
             'Arthur'
 
         If the ``Content-Type`` header is not ``"application/json"``, then a
@@ -692,8 +682,13 @@ access these properties as part of a test condition.
 
         def test_something(self):
             session = self.client.session
-            session['somekey'] = 'test'
+            session["somekey"] = "test"
             session.save()
+
+.. method:: Client.asession()
+
+    This is similar to the :attr:`session` attribute but it works in async
+    contexts.
 
 Setting the language
 --------------------
@@ -708,9 +703,10 @@ a name of :setting:`LANGUAGE_COOKIE_NAME` and a value of the language code::
 
     from django.conf import settings
 
+
     def test_language_using_cookie(self):
-        self.client.cookies.load({settings.LANGUAGE_COOKIE_NAME: 'fr'})
-        response = self.client.get('/')
+        self.client.cookies.load({settings.LANGUAGE_COOKIE_NAME: "fr"})
+        response = self.client.get("/")
         self.assertEqual(response.content, b"Bienvenue sur mon site.")
 
 or by including the ``Accept-Language`` HTTP header in the request::
@@ -734,9 +730,10 @@ If the middleware isn't enabled, the active language may be set using
 
     from django.utils import translation
 
+
     def test_language_using_override(self):
-        with translation.override('fr'):
-            response = self.client.get('/')
+        with translation.override("fr"):
+            response = self.client.get("/")
         self.assertEqual(response.content, b"Bienvenue sur mon site.")
 
 More details are in :ref:`explicitly-setting-the-active-language`.
@@ -749,6 +746,7 @@ The following is a unit test using the test client::
     import unittest
     from django.test import Client
 
+
     class SimpleTest(unittest.TestCase):
         def setUp(self):
             # Every test needs a client.
@@ -756,13 +754,13 @@ The following is a unit test using the test client::
 
         def test_details(self):
             # Issue a GET request.
-            response = self.client.get('/customer/details/')
+            response = self.client.get("/customer/details/")
 
             # Check that the response is 200 OK.
             self.assertEqual(response.status_code, 200)
 
             # Check that the rendered context contains 5 customers.
-            self.assertEqual(len(response.context['customers']), 5)
+            self.assertEqual(len(response.context["customers"]), 5)
 
 .. seealso::
 
@@ -843,7 +841,6 @@ If your tests make any database queries, use subclasses
     methods, don't forget to call the ``super`` implementation::
 
         class MyTestCase(TestCase):
-
             @classmethod
             def setUpClass(cls):
                 super().setUpClass()
@@ -871,8 +868,8 @@ If your tests make any database queries, use subclasses
 ``TransactionTestCase`` inherits from :class:`~django.test.SimpleTestCase` to
 add some database-specific features:
 
-* Resetting the database to a known state at the beginning of each test to
-  ease testing and using the ORM.
+* Resetting the database to a known state at the end of each test to ease
+  testing and using the ORM.
 * Database :attr:`~TransactionTestCase.fixtures`.
 * Test :ref:`skipping based on database backend features <skipping-tests>`.
 * The remaining specialized :meth:`assert*
@@ -881,7 +878,7 @@ add some database-specific features:
 Django's :class:`TestCase` class is a more commonly used subclass of
 ``TransactionTestCase`` that makes use of database transaction facilities
 to speed up the process of resetting the database to a known state at the
-beginning of each test. A consequence of this, however, is that some database
+end of each test. A consequence of this, however, is that some database
 behaviors cannot be tested within a Django ``TestCase`` class. For instance,
 you cannot test that a block of code is executing within a transaction, as is
 required when using
@@ -943,6 +940,7 @@ It also provides an additional method:
 
         from django.test import TestCase
 
+
         class MyTests(TestCase):
             @classmethod
             def setUpTestData(cls):
@@ -990,15 +988,15 @@ It also provides an additional method:
             def test_post(self):
                 with self.captureOnCommitCallbacks(execute=True) as callbacks:
                     response = self.client.post(
-                        '/contact/',
-                        {'message': 'I like your site'},
+                        "/contact/",
+                        {"message": "I like your site"},
                     )
 
                 self.assertEqual(response.status_code, 200)
                 self.assertEqual(len(callbacks), 1)
                 self.assertEqual(len(mail.outbox), 1)
-                self.assertEqual(mail.outbox[0].subject, 'Contact Form')
-                self.assertEqual(mail.outbox[0].body, 'I like your site')
+                self.assertEqual(mail.outbox[0].subject, "Contact Form")
+                self.assertEqual(mail.outbox[0].body, "I like your site")
 
 .. _live-test-server:
 
@@ -1020,12 +1018,11 @@ port assigned by the operating system. The server's URL can be accessed with
 ``self.live_server_url`` during the tests.
 
 To demonstrate how to use ``LiveServerTestCase``, let's write a Selenium test.
-First of all, you need to install the `selenium package`_ into your Python
-path:
+First of all, you need to install the :pypi:`selenium` package:
 
 .. console::
 
-    $ python -m pip install selenium
+    $ python -m pip install "selenium >= 4.8.0"
 
 Then, add a ``LiveServerTestCase``-based test to your app's tests module
 (for example: ``myapp/tests.py``). For this example, we'll assume you're using
@@ -1043,8 +1040,9 @@ The code for this test may look as follows::
     from selenium.webdriver.common.by import By
     from selenium.webdriver.firefox.webdriver import WebDriver
 
+
     class MySeleniumTests(StaticLiveServerTestCase):
-        fixtures = ['user-data.json']
+        fixtures = ["user-data.json"]
 
         @classmethod
         def setUpClass(cls):
@@ -1058,11 +1056,11 @@ The code for this test may look as follows::
             super().tearDownClass()
 
         def test_login(self):
-            self.selenium.get(f'{self.live_server_url}/login/')
+            self.selenium.get(f"{self.live_server_url}/login/")
             username_input = self.selenium.find_element(By.NAME, "username")
-            username_input.send_keys('myuser')
+            username_input.send_keys("myuser")
             password_input = self.selenium.find_element(By.NAME, "password")
-            password_input.send_keys('secret')
+            password_input.send_keys("secret")
             self.selenium.find_element(By.XPATH, '//input[@value="Log in"]').click()
 
 Finally, you may run the test as follows:
@@ -1078,7 +1076,6 @@ example above is just a tiny fraction of what the Selenium client can do; check
 out the `full reference`_ for more details.
 
 .. _Selenium: https://www.selenium.dev/
-.. _selenium package: https://pypi.org/project/selenium/
 .. _full reference: https://selenium-python.readthedocs.io/api.html
 .. _Firefox: https://www.mozilla.com/firefox/
 
@@ -1099,12 +1096,14 @@ out the `full reference`_ for more details.
 
         def test_login(self):
             from selenium.webdriver.support.wait import WebDriverWait
+
             timeout = 2
             ...
             self.selenium.find_element(By.XPATH, '//input[@value="Log in"]').click()
             # Wait until the response is received
             WebDriverWait(self.selenium, timeout).until(
-                lambda driver: driver.find_element(By.TAG_NAME, 'body'))
+                lambda driver: driver.find_element(By.TAG_NAME, "body")
+            )
 
     The tricky thing here is that there's really no such thing as a "page load,"
     especially in modern web apps that generate HTML dynamically after the
@@ -1114,7 +1113,7 @@ out the `full reference`_ for more details.
     for more information.
 
     .. _Selenium FAQ: https://web.archive.org/web/20160129132110/http://code.google.com/p/selenium/wiki/FrequentlyAskedQuestions#Q:_WebDriver_fails_to_find_elements_/_Does_not_block_on_page_loa
-    .. _Selenium documentation: https://www.selenium.dev/documentation/webdriver/waits/#explicit-wait
+    .. _Selenium documentation: https://www.selenium.dev/documentation/webdriver/waits/#explicit-waits
 
 Test cases features
 ===================
@@ -1134,28 +1133,30 @@ This means, instead of instantiating a ``Client`` in each test::
     import unittest
     from django.test import Client
 
+
     class SimpleTest(unittest.TestCase):
         def test_details(self):
             client = Client()
-            response = client.get('/customer/details/')
+            response = client.get("/customer/details/")
             self.assertEqual(response.status_code, 200)
 
         def test_index(self):
             client = Client()
-            response = client.get('/customer/index/')
+            response = client.get("/customer/index/")
             self.assertEqual(response.status_code, 200)
 
 ...you can refer to ``self.client``, like so::
 
     from django.test import TestCase
 
+
     class SimpleTest(TestCase):
         def test_details(self):
-            response = self.client.get('/customer/details/')
+            response = self.client.get("/customer/details/")
             self.assertEqual(response.status_code, 200)
 
         def test_index(self):
-            response = self.client.get('/customer/index/')
+            response = self.client.get("/customer/index/")
             self.assertEqual(response.status_code, 200)
 
 Customizing the test client
@@ -1169,9 +1170,11 @@ attribute::
 
     from django.test import Client, TestCase
 
+
     class MyTestClient(Client):
         # Specialized methods for your environment
         ...
+
 
     class MyTest(TestCase):
         client_class = MyTestClient
@@ -1187,8 +1190,8 @@ Fixture loading
 
 .. attribute:: TransactionTestCase.fixtures
 
-A test case for a database-backed website isn't much use if there isn't any
-data in the database. Tests are more readable and it's more maintainable to
+A test case class for a database-backed website isn't much use if there isn't
+any data in the database. Tests are more readable and it's more maintainable to
 create objects using the ORM, for example in :meth:`TestCase.setUpTestData`,
 however, you can also use :ref:`fixtures <fixtures-explanation>`.
 
@@ -1209,8 +1212,9 @@ subclass::
     from django.test import TestCase
     from myapp.models import Animal
 
+
     class AnimalTestCase(TestCase):
-        fixtures = ['mammals.json', 'birds']
+        fixtures = ["mammals.json", "birds"]
 
         def setUp(self):
             # Test definitions as before.
@@ -1222,24 +1226,34 @@ subclass::
 
 Here's specifically what will happen:
 
-* At the start of each test, before ``setUp()`` is run, Django will flush the
-  database, returning the database to the state it was in directly after
-  :djadmin:`migrate` was called.
+* During ``setUpClass()``, all the named fixtures are installed. In this
+  example, Django will install any JSON fixture named ``mammals``, followed by
+  any fixture named ``birds``. See the :ref:`fixtures-explanation` topic for
+  more details on defining and installing fixtures.
 
-* Then, all the named fixtures are installed. In this example, Django will
-  install any JSON fixture named ``mammals``, followed by any fixture named
-  ``birds``. See the :ref:`fixtures-explanation` topic for more details on
-  defining and installing fixtures.
+For most unit tests using :class:`TestCase`, Django doesn't need to do
+anything else, because transactions are used to clean the database after each
+test for performance reasons. But for :class:`TransactionTestCase`, the
+following actions will take place:
 
-For performance reasons, :class:`TestCase` loads fixtures once for the entire
-test class, before :meth:`~TestCase.setUpTestData`, instead of before each
-test, and it uses transactions to clean the database before each test. In any case,
-you can be certain that the outcome of a test will not be affected by another
-test or by the order of test execution.
+* At the end of each test Django will flush the database, returning the
+  database to the state it was in directly after :djadmin:`migrate` was
+  called.
+
+* For each subsequent test, the fixtures will be reloaded before ``setUp()``
+  is run.
+
+In any case, you can be certain that the outcome of a test will not be
+affected by another test or by the order of test execution.
 
 By default, fixtures are only loaded into the ``default`` database. If you are
 using multiple databases and set :attr:`TransactionTestCase.databases`,
 fixtures will be loaded into all specified databases.
+
+.. versionchanged:: 5.2
+
+    For :class:`TransactionTestCase`, fixtures were made available during
+    ``setUpClass()``.
 
 URLconf configuration
 ---------------------
@@ -1264,12 +1278,12 @@ by at least one test through ``databases``.
 
 However, a big part of the time taken to run a Django ``TestCase`` is consumed
 by the call to ``flush`` that ensures that you have a clean database at the
-start of each test run. If you have multiple databases, multiple flushes are
+end of each test run. If you have multiple databases, multiple flushes are
 required (one for each database), which can be a time consuming activity --
 especially if your tests don't need to test multi-database activity.
 
 As an optimization, Django only flushes the ``default`` database at
-the start of each test run. If your setup contains multiple databases,
+the end of each test run. If your setup contains multiple databases,
 and you have a test that requires every database to be clean, you can
 use the ``databases`` attribute on the test suite to request extra databases
 to be flushed.
@@ -1277,14 +1291,14 @@ to be flushed.
 For example::
 
     class TestMyViews(TransactionTestCase):
-        databases = {'default', 'other'}
+        databases = {"default", "other"}
 
         def test_index_page_view(self):
             call_some_test_code()
 
-This test case will flush the ``default`` and ``other`` test databases before
-running ``test_index_page_view``. You can also use ``'__all__'`` to specify
-that all of the test databases must be flushed.
+This test case class will flush the ``default`` and ``other`` test databases
+after running ``test_index_page_view``. You can also use ``'__all__'`` to
+specify that all of the test databases must be flushed.
 
 The ``databases`` flag also controls which databases the
 :attr:`TransactionTestCase.fixtures` are loaded into. By default, fixtures are
@@ -1305,10 +1319,9 @@ wrapping against non-``default`` databases.
 For example::
 
     class OtherDBTests(TestCase):
-        databases = {'other'}
+        databases = {"other"}
 
-        def test_other_db_query(self):
-            ...
+        def test_other_db_query(self): ...
 
 This test will only allow queries against the ``other`` database. Just like for
 :attr:`SimpleTestCase.databases` and :attr:`TransactionTestCase.databases`, the
@@ -1335,18 +1348,17 @@ Django provides a standard Python context manager (see :pep:`343`) called
 
     from django.test import TestCase
 
+
     class LoginTestCase(TestCase):
-
         def test_login(self):
-
             # First check for the default behavior
-            response = self.client.get('/sekrit/')
-            self.assertRedirects(response, '/accounts/login/?next=/sekrit/')
+            response = self.client.get("/sekrit/")
+            self.assertRedirects(response, "/accounts/login/?next=/sekrit/")
 
             # Then override the LOGIN_URL setting
-            with self.settings(LOGIN_URL='/other/login/'):
-                response = self.client.get('/sekrit/')
-                self.assertRedirects(response, '/other/login/?next=/sekrit/')
+            with self.settings(LOGIN_URL="/other/login/"):
+                response = self.client.get("/sekrit/")
+                self.assertRedirects(response, "/other/login/?next=/sekrit/")
 
 This example will override the :setting:`LOGIN_URL` setting for the code
 in the ``with`` block and reset its value to the previous state afterward.
@@ -1360,19 +1372,21 @@ settings changes::
 
     from django.test import TestCase
 
-    class MiddlewareTestCase(TestCase):
 
+    class MiddlewareTestCase(TestCase):
         def test_cache_middleware(self):
-            with self.modify_settings(MIDDLEWARE={
-                'append': 'django.middleware.cache.FetchFromCacheMiddleware',
-                'prepend': 'django.middleware.cache.UpdateCacheMiddleware',
-                'remove': [
-                    'django.contrib.sessions.middleware.SessionMiddleware',
-                    'django.contrib.auth.middleware.AuthenticationMiddleware',
-                    'django.contrib.messages.middleware.MessageMiddleware',
-                ],
-            }):
-                response = self.client.get('/')
+            with self.modify_settings(
+                MIDDLEWARE={
+                    "append": "django.middleware.cache.FetchFromCacheMiddleware",
+                    "prepend": "django.middleware.cache.UpdateCacheMiddleware",
+                    "remove": [
+                        "django.contrib.sessions.middleware.SessionMiddleware",
+                        "django.contrib.auth.middleware.AuthenticationMiddleware",
+                        "django.contrib.messages.middleware.MessageMiddleware",
+                    ],
+                }
+            ):
+                response = self.client.get("/")
                 # ...
 
 For each action, you can supply either a list of values or a string. When the
@@ -1387,23 +1401,23 @@ like this::
 
     from django.test import TestCase, override_settings
 
-    class LoginTestCase(TestCase):
 
-        @override_settings(LOGIN_URL='/other/login/')
+    class LoginTestCase(TestCase):
+        @override_settings(LOGIN_URL="/other/login/")
         def test_login(self):
-            response = self.client.get('/sekrit/')
-            self.assertRedirects(response, '/other/login/?next=/sekrit/')
+            response = self.client.get("/sekrit/")
+            self.assertRedirects(response, "/other/login/?next=/sekrit/")
 
 The decorator can also be applied to :class:`~django.test.TestCase` classes::
 
     from django.test import TestCase, override_settings
 
-    @override_settings(LOGIN_URL='/other/login/')
-    class LoginTestCase(TestCase):
 
+    @override_settings(LOGIN_URL="/other/login/")
+    class LoginTestCase(TestCase):
         def test_login(self):
-            response = self.client.get('/sekrit/')
-            self.assertRedirects(response, '/other/login/?next=/sekrit/')
+            response = self.client.get("/sekrit/")
+            self.assertRedirects(response, "/other/login/?next=/sekrit/")
 
 .. function:: modify_settings(*args, **kwargs)
 
@@ -1412,28 +1426,32 @@ decorator::
 
     from django.test import TestCase, modify_settings
 
-    class MiddlewareTestCase(TestCase):
 
-        @modify_settings(MIDDLEWARE={
-            'append': 'django.middleware.cache.FetchFromCacheMiddleware',
-            'prepend': 'django.middleware.cache.UpdateCacheMiddleware',
-        })
+    class MiddlewareTestCase(TestCase):
+        @modify_settings(
+            MIDDLEWARE={
+                "append": "django.middleware.cache.FetchFromCacheMiddleware",
+                "prepend": "django.middleware.cache.UpdateCacheMiddleware",
+            }
+        )
         def test_cache_middleware(self):
-            response = self.client.get('/')
+            response = self.client.get("/")
             # ...
 
 The decorator can also be applied to test case classes::
 
     from django.test import TestCase, modify_settings
 
-    @modify_settings(MIDDLEWARE={
-        'append': 'django.middleware.cache.FetchFromCacheMiddleware',
-        'prepend': 'django.middleware.cache.UpdateCacheMiddleware',
-    })
-    class MiddlewareTestCase(TestCase):
 
+    @modify_settings(
+        MIDDLEWARE={
+            "append": "django.middleware.cache.FetchFromCacheMiddleware",
+            "prepend": "django.middleware.cache.UpdateCacheMiddleware",
+        }
+    )
+    class MiddlewareTestCase(TestCase):
         def test_cache_middleware(self):
-            response = self.client.get('/')
+            response = self.client.get("/")
             # ...
 
 .. note::
@@ -1483,15 +1501,16 @@ when settings are changed.
 
 Django itself uses this signal to reset various data:
 
-============================================================================ ========================
-Overridden settings                                                          Data reset
-============================================================================ ========================
-USE_TZ, TIME_ZONE                                                            Databases timezone
-TEMPLATES                                                                    Template engines
-SERIALIZATION_MODULES                                                        Serializers cache
-LOCALE_PATHS, LANGUAGE_CODE                                                  Default translation and loaded translations
-DEFAULT_FILE_STORAGE, STATICFILES_STORAGE, STATIC_ROOT, STATIC_URL, STORAGES Storages configuration
-============================================================================ ========================
+================================= ========================
+Overridden settings               Data reset
+================================= ========================
+USE_TZ, TIME_ZONE                 Databases timezone
+TEMPLATES                         Template engines
+FORM_RENDERER                     Default renderer
+SERIALIZATION_MODULES             Serializers cache
+LOCALE_PATHS, LANGUAGE_CODE       Default translation and loaded translations
+STATIC_ROOT, STATIC_URL, STORAGES Storages configuration
+================================= ========================
 
 Isolating apps
 --------------
@@ -1511,19 +1530,22 @@ Isolating apps
         from django.test import SimpleTestCase
         from django.test.utils import isolate_apps
 
-        class MyModelTests(SimpleTestCase):
 
+        class MyModelTests(SimpleTestCase):
             @isolate_apps("app_label")
             def test_model_definition(self):
                 class TestModel(models.Model):
                     pass
+
                 ...
 
     … or::
 
         with isolate_apps("app_label"):
+
             class TestModel(models.Model):
                 pass
+
             ...
 
     The decorator form can also be applied to classes.
@@ -1544,6 +1566,7 @@ Isolating apps
             def test_model_definition(self):
                 class TestModel(models.Model):
                     pass
+
                 self.assertIs(self.apps.get_model("app_label", "TestModel"), TestModel)
 
     … or alternatively as an argument on the test method when used as a method
@@ -1554,6 +1577,7 @@ Isolating apps
             def test_model_definition(self, apps):
                 class TestModel(models.Model):
                     pass
+
                 self.assertIs(apps.get_model("app_label", "TestModel"), TestModel)
 
 .. _emptying-test-outbox:
@@ -1596,8 +1620,8 @@ your test suite.
     given, returns a context manager so that the code being tested can be
     written inline rather than as a function::
 
-        with self.assertRaisesMessage(ValueError, 'invalid literal for int()'):
-            int('a')
+        with self.assertRaisesMessage(ValueError, "invalid literal for int()"):
+            int("a")
 
 .. method:: SimpleTestCase.assertWarnsMessage(expected_warning, expected_message, callable, *args, **kwargs)
             SimpleTestCase.assertWarnsMessage(expected_warning, expected_message)
@@ -1623,7 +1647,9 @@ your test suite.
     ``a@a.com`` as a valid email address, but rejects ``aaa`` with a reasonable
     error message::
 
-        self.assertFieldOutput(EmailField, {'a@a.com': 'a@a.com'}, {'aaa': ['Enter a valid email address.']})
+        self.assertFieldOutput(
+            EmailField, {"a@a.com": "a@a.com"}, {"aaa": ["Enter a valid email address."]}
+        )
 
 .. method:: SimpleTestCase.assertFormError(form, field, errors, msg_prefix='')
 
@@ -1659,11 +1685,6 @@ your test suite.
 
     ``field`` and ``errors`` have the same meaning as the parameters to
     ``assertFormError()``.
-
-    .. deprecated:: 4.2
-
-        The ``assertFormsetError()`` assertion method is deprecated. Use
-        ``assertFormSetError()`` instead.
 
 .. method:: SimpleTestCase.assertContains(response, text, count=None, status_code=200, msg_prefix='', html=False)
 
@@ -1706,10 +1727,10 @@ your test suite.
 
     You can use this as a context manager, like this::
 
-        with self.assertTemplateUsed('index.html'):
-            render_to_string('index.html')
-        with self.assertTemplateUsed(template_name='index.html'):
-            render_to_string('index.html')
+        with self.assertTemplateUsed("index.html"):
+            render_to_string("index.html")
+        with self.assertTemplateUsed(template_name="index.html"):
+            render_to_string("index.html")
 
 .. method:: SimpleTestCase.assertTemplateNotUsed(response, template_name, msg_prefix='')
 
@@ -1767,14 +1788,14 @@ your test suite.
     ``AssertionError``::
 
         self.assertHTMLEqual(
-            '<p>Hello <b>&#x27;world&#x27;!</p>',
-            '''<p>
+            "<p>Hello <b>&#x27;world&#x27;!</p>",
+            """<p>
                 Hello   <b>&#39;world&#39;! </b>
-            </p>'''
+            </p>""",
         )
         self.assertHTMLEqual(
             '<input type="checkbox" checked="checked" id="id_accept_terms" />',
-            '<input id="id_accept_terms" type="checkbox" checked>'
+            '<input id="id_accept_terms" type="checkbox" checked>',
         )
 
     ``html1`` and ``html2`` must contain HTML. An ``AssertionError`` will be
@@ -1826,6 +1847,14 @@ your test suite.
     Whitespace in most cases is ignored, and attribute ordering is not
     significant. See :meth:`~SimpleTestCase.assertHTMLEqual` for more details.
 
+.. method:: SimpleTestCase.assertNotInHTML(needle, haystack, msg_prefix="")
+
+    Asserts that the HTML fragment ``needle`` is *not* contained in the
+    ``haystack``.
+
+    Whitespace in most cases is ignored, and attribute ordering is not
+    significant. See :meth:`~SimpleTestCase.assertHTMLEqual` for more details.
+
 .. method:: SimpleTestCase.assertJSONEqual(raw, expected_data, msg=None)
 
     Asserts that the JSON fragments ``raw`` and ``expected_data`` are equal.
@@ -1858,11 +1887,6 @@ your test suite.
 
     Output in case of error can be customized with the ``msg`` argument.
 
-    .. deprecated:: 4.2
-
-        The ``assertQuerysetEqual()`` assertion method is deprecated. Use
-        ``assertQuerySetEqual()`` instead.
-
 .. method:: TransactionTestCase.assertNumQueries(num, func, *args, **kwargs)
 
     Asserts that when ``func`` is called with ``*args`` and ``**kwargs`` that
@@ -1871,7 +1895,7 @@ your test suite.
     If a ``"using"`` key is present in ``kwargs`` it is used as the database
     alias for which to check the number of queries::
 
-        self.assertNumQueries(7, using='non_default_db')
+        self.assertNumQueries(7, using="non_default_db")
 
     If you wish to call a function with a ``using`` parameter you can do it by
     wrapping the call with a ``lambda`` to add an extra parameter::
@@ -1894,35 +1918,29 @@ you might label fast or slow tests::
 
     from django.test import tag
 
+
     class SampleTestCase(TestCase):
+        @tag("fast")
+        def test_fast(self): ...
 
-        @tag('fast')
-        def test_fast(self):
-            ...
+        @tag("slow")
+        def test_slow(self): ...
 
-        @tag('slow')
-        def test_slow(self):
-            ...
+        @tag("slow", "core")
+        def test_slow_but_core(self): ...
 
-        @tag('slow', 'core')
-        def test_slow_but_core(self):
-            ...
+You can also tag a test case class::
 
-You can also tag a test case::
-
-    @tag('slow', 'core')
-    class SampleTestCase(TestCase):
-        ...
+    @tag("slow", "core")
+    class SampleTestCase(TestCase): ...
 
 Subclasses inherit tags from superclasses, and methods inherit tags from their
 class. Given::
 
-    @tag('foo')
+    @tag("foo")
     class SampleTestCaseChild(SampleTestCase):
-
-        @tag('bar')
-        def test(self):
-            ...
+        @tag("bar")
+        def test(self): ...
 
 ``SampleTestCaseChild.test`` will be labeled with ``'slow'``, ``'core'``,
 ``'bar'``, and ``'foo'``.
@@ -1969,14 +1987,13 @@ If you are testing from an asynchronous function, you must also use the
 asynchronous test client. This is available as ``django.test.AsyncClient``,
 or as ``self.async_client`` on any test.
 
-.. class:: AsyncClient(enforce_csrf_checks=False, raise_request_exception=True, *, headers=None, **defaults)
+.. class:: AsyncClient(enforce_csrf_checks=False, raise_request_exception=True, *, headers=None, query_params=None, **defaults)
 
 ``AsyncClient`` has the same methods and signatures as the synchronous (normal)
-test client, with two exceptions:
+test client, with the following exceptions:
 
 * In the initialization, arbitrary keyword arguments in ``defaults`` are added
   directly into the ASGI scope.
-* The ``follow`` parameter is not supported.
 * Headers passed as ``extra`` keyword arguments should not have the ``HTTP_``
   prefix required by the synchronous client (see :meth:`Client.get`). For
   example, here is how to set an HTTP ``Accept`` header:
@@ -1984,20 +2001,12 @@ test client, with two exceptions:
   .. code-block:: pycon
 
     >>> c = AsyncClient()
-    >>> c.get(
-    ...     '/customers/details/',
-    ...     {'name': 'fred', 'age': 7},
-    ...     ACCEPT='application/json'
-    ... )
-
-.. versionchanged:: 4.2
-
-    The ``headers`` parameter was added.
+    >>> c.get("/customers/details/", {"name": "fred", "age": 7}, ACCEPT="application/json")
 
 Using ``AsyncClient`` any method that makes a request must be awaited::
 
     async def test_my_thing(self):
-        response = await self.async_client.get('/some-url/')
+        response = await self.async_client.get("/some-url/")
         self.assertEqual(response.status_code, 200)
 
 The asynchronous client can also call synchronous views; it runs through
@@ -2019,12 +2028,11 @@ creates.
         from asgiref.sync import async_to_sync
         from django.test import TestCase
 
-        class MyTests(TestCase):
 
+        class MyTests(TestCase):
             @mock.patch(...)
             @async_to_sync
-            async def test_my_thing(self):
-                ...
+            async def test_my_thing(self): ...
 
 .. _topics-testing-email:
 
@@ -2061,12 +2069,15 @@ and contents::
     from django.core import mail
     from django.test import TestCase
 
+
     class EmailTest(TestCase):
         def test_send_email(self):
             # Send message.
             mail.send_mail(
-                'Subject here', 'Here is the message.',
-                'from@example.com', ['to@example.com'],
+                "Subject here",
+                "Here is the message.",
+                "from@example.com",
+                ["to@example.com"],
                 fail_silently=False,
             )
 
@@ -2074,7 +2085,7 @@ and contents::
             self.assertEqual(len(mail.outbox), 1)
 
             # Verify that the subject of the first message is correct.
-            self.assertEqual(mail.outbox[0].subject, 'Subject here')
+            self.assertEqual(mail.outbox[0].subject, "Subject here")
 
 As noted :ref:`previously <emptying-test-outbox>`, the test outbox is emptied
 at the start of every test in a Django ``*TestCase``. To empty the outbox
@@ -2098,11 +2109,12 @@ redirected into a ``StringIO`` instance::
     from django.core.management import call_command
     from django.test import TestCase
 
+
     class ClosepollTest(TestCase):
         def test_command_output(self):
             out = StringIO()
-            call_command('closepoll', stdout=out)
-            self.assertIn('Expected output', out.getvalue())
+            call_command("closepoll", poll_ids=[1], stdout=out)
+            self.assertIn('Successfully closed poll "1"', out.getvalue())
 
 .. _skipping-tests:
 
@@ -2143,7 +2155,7 @@ supports transactions (e.g., it would *not* run under PostgreSQL, but
 it would under MySQL with MyISAM tables)::
 
     class MyTests(TestCase):
-        @skipIfDBFeature('supports_transactions')
+        @skipIfDBFeature("supports_transactions")
         def test_transaction_behavior(self):
             # ... conditional test code
             pass
@@ -2158,7 +2170,7 @@ supports transactions (e.g., it would run under PostgreSQL, but *not*
 under MySQL with MyISAM tables)::
 
     class MyTests(TestCase):
-        @skipUnlessDBFeature('supports_transactions')
+        @skipUnlessDBFeature("supports_transactions")
         def test_transaction_behavior(self):
             # ... conditional test code
             pass

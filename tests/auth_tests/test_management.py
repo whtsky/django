@@ -126,6 +126,13 @@ class GetDefaultUsernameTestCase(TestCase):
     def test_actual_implementation(self):
         self.assertIsInstance(management.get_system_username(), str)
 
+    def test_getuser_raises_exception(self):
+        # TODO: Drop ImportError and KeyError when dropping support for PY312.
+        for exc in (ImportError, KeyError, OSError):
+            with self.subTest(exc=str(exc)):
+                with mock.patch("getpass.getuser", side_effect=exc):
+                    self.assertEqual(management.get_system_username(), "")
+
     def test_simple(self):
         management.get_system_username = lambda: "joe"
         self.assertEqual(management.get_default_username(), "joe")
@@ -163,11 +170,9 @@ class ChangepasswordManagementCommandTestCase(TestCase):
 
     def setUp(self):
         self.stdout = StringIO()
+        self.addCleanup(self.stdout.close)
         self.stderr = StringIO()
-
-    def tearDown(self):
-        self.stdout.close()
-        self.stderr.close()
+        self.addCleanup(self.stderr.close)
 
     @mock.patch.object(getpass, "getpass", return_value="password")
     def test_get_pass(self, mock_get_pass):
@@ -525,7 +530,7 @@ class CreatesuperuserManagementCommandTestCase(TestCase):
         self.assertEqual(u.group, group)
 
         non_existent_email = "mymail2@gmail.com"
-        msg = "email instance with email %r does not exist." % non_existent_email
+        msg = "email instance with email %r is not a valid choice." % non_existent_email
         with self.assertRaisesMessage(CommandError, msg):
             call_command(
                 "createsuperuser",
@@ -596,7 +601,7 @@ class CreatesuperuserManagementCommandTestCase(TestCase):
         email = Email.objects.create(email="mymail@gmail.com")
         Group.objects.all().delete()
         nonexistent_group_id = 1
-        msg = f"group instance with id {nonexistent_group_id} does not exist."
+        msg = f"group instance with id {nonexistent_group_id} is not a valid choice."
 
         with self.assertRaisesMessage(CommandError, msg):
             call_command(
@@ -613,7 +618,7 @@ class CreatesuperuserManagementCommandTestCase(TestCase):
         email = Email.objects.create(email="mymail@gmail.com")
         Group.objects.all().delete()
         nonexistent_group_id = 1
-        msg = f"group instance with id {nonexistent_group_id} does not exist."
+        msg = f"group instance with id {nonexistent_group_id} is not a valid choice."
 
         with mock.patch.dict(
             os.environ,
@@ -633,7 +638,7 @@ class CreatesuperuserManagementCommandTestCase(TestCase):
         email = Email.objects.create(email="mymail@gmail.com")
         Group.objects.all().delete()
         nonexistent_group_id = 1
-        msg = f"group instance with id {nonexistent_group_id} does not exist."
+        msg = f"group instance with id {nonexistent_group_id} is not a valid choice."
 
         @mock_inputs(
             {
@@ -967,6 +972,36 @@ class CreatesuperuserManagementCommandTestCase(TestCase):
                 stdout=new_io,
                 stderr=new_io,
             )
+
+    def test_blank_email_allowed_non_interactive(self):
+        new_io = StringIO()
+
+        call_command(
+            "createsuperuser",
+            email="",
+            username="joe",
+            interactive=False,
+            stdout=new_io,
+            stderr=new_io,
+        )
+        self.assertEqual(new_io.getvalue().strip(), "Superuser created successfully.")
+        u = User.objects.get(username="joe")
+        self.assertEqual(u.email, "")
+
+    @mock.patch.dict(os.environ, {"DJANGO_SUPERUSER_EMAIL": ""})
+    def test_blank_email_allowed_non_interactive_environment_variable(self):
+        new_io = StringIO()
+
+        call_command(
+            "createsuperuser",
+            username="joe",
+            interactive=False,
+            stdout=new_io,
+            stderr=new_io,
+        )
+        self.assertEqual(new_io.getvalue().strip(), "Superuser created successfully.")
+        u = User.objects.get(username="joe")
+        self.assertEqual(u.email, "")
 
     def test_password_validation_bypass(self):
         """
@@ -1500,7 +1535,7 @@ class CreatePermissionsMultipleDatabasesTests(TestCase):
 
     def test_set_permissions_fk_to_using_parameter(self):
         Permission.objects.using("other").delete()
-        with self.assertNumQueries(6, using="other") as captured_queries:
+        with self.assertNumQueries(4, using="other") as captured_queries:
             create_permissions(apps.get_app_config("auth"), verbosity=0, using="other")
         self.assertIn("INSERT INTO", captured_queries[-1]["sql"].upper())
         self.assertGreater(Permission.objects.using("other").count(), 0)

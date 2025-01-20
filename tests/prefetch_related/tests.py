@@ -978,6 +978,31 @@ class CustomPrefetchTests(TestCase):
         with self.assertNumQueries(5):
             self.traverse_qs(list(houses), [["occupants", "houses", "main_room"]])
 
+    def test_nested_prefetch_related_with_duplicate_prefetch_and_depth(self):
+        people = Person.objects.prefetch_related(
+            Prefetch(
+                "houses__main_room",
+                queryset=Room.objects.filter(name="Dining room"),
+                to_attr="dining_room",
+            ),
+            "houses__main_room",
+        )
+        with self.assertNumQueries(4):
+            main_room = people[0].houses.all()[0]
+
+        people = Person.objects.prefetch_related(
+            "houses__main_room",
+            Prefetch(
+                "houses__main_room",
+                queryset=Room.objects.filter(name="Dining room"),
+                to_attr="dining_room",
+            ),
+        )
+        with self.assertNumQueries(4):
+            main_room = people[0].houses.all()[0]
+
+        self.assertEqual(main_room.main_room, self.room1_1)
+
     def test_values_queryset(self):
         msg = "Prefetch querysets cannot use raw(), values(), and values_list()."
         with self.assertRaisesMessage(ValueError, msg):
@@ -1592,8 +1617,9 @@ class MultiDbTests(TestCase):
         )
 
         # Explicit using on a different db.
-        with self.assertNumQueries(1, using="default"), self.assertNumQueries(
-            1, using="other"
+        with (
+            self.assertNumQueries(1, using="default"),
+            self.assertNumQueries(1, using="other"),
         ):
             prefetch = Prefetch(
                 "first_time_authors", queryset=Author.objects.using("default")
@@ -1671,7 +1697,7 @@ class Ticket21760Tests(TestCase):
 
     def test_bug(self):
         prefetcher = get_prefetcher(self.rooms[0], "house", "house")[0]
-        queryset = prefetcher.get_prefetch_queryset(list(Room.objects.all()))[0]
+        queryset = prefetcher.get_prefetch_querysets(list(Room.objects.all()))[0]
         self.assertNotIn(" JOIN ", str(queryset.query))
 
 
@@ -1969,3 +1995,18 @@ class PrefetchLimitTests(TestDataMixin, TestCase):
         )
         with self.assertRaisesMessage(NotSupportedError, msg):
             list(Book.objects.prefetch_related(Prefetch("authors", authors[1:])))
+
+    @skipUnlessDBFeature("supports_over_clause")
+    def test_empty_order(self):
+        authors = Author.objects.order_by()
+        with self.assertNumQueries(3):
+            books = list(
+                Book.objects.prefetch_related(
+                    Prefetch("authors", authors),
+                    Prefetch("authors", authors[:1], to_attr="authors_sliced"),
+                )
+            )
+        for book in books:
+            with self.subTest(book=book):
+                self.assertEqual(len(book.authors_sliced), 1)
+                self.assertIn(book.authors_sliced[0], list(book.authors.all()))

@@ -1,9 +1,10 @@
 import math
 from decimal import Decimal
+from unittest import mock
 
 from django.core import validators
 from django.core.exceptions import ValidationError
-from django.db import models
+from django.db import connection, models
 from django.test import TestCase
 
 from .models import BigD, Foo
@@ -48,6 +49,20 @@ class DecimalFieldTests(TestCase):
         self.assertIsNone(f.get_prep_value(None))
         self.assertEqual(f.get_prep_value("2.4"), Decimal("2.4"))
 
+    def test_get_db_prep_value(self):
+        """
+        DecimalField.get_db_prep_value() must call
+        DatabaseOperations.adapt_decimalfield_value().
+        """
+        f = models.DecimalField(max_digits=5, decimal_places=1)
+        # None of the built-in database backends implement
+        # adapt_decimalfield_value(), so this must be confirmed with mocking.
+        with mock.patch.object(
+            connection.ops.__class__, "adapt_decimalfield_value"
+        ) as adapt_decimalfield_value:
+            f.get_db_prep_value("2.4", connection)
+        adapt_decimalfield_value.assert_called_with(Decimal("2.4"), 5, 1)
+
     def test_filter_with_strings(self):
         """
         Should be able to filter decimal fields using strings (#8023).
@@ -91,7 +106,10 @@ class DecimalFieldTests(TestCase):
         Really big values can be used in a filter statement.
         """
         # This should not crash.
-        Foo.objects.filter(d__gte=100000000000)
+        self.assertSequenceEqual(Foo.objects.filter(d__gte=100000000000), [])
+
+    def test_lookup_decimal_larger_than_max_digits(self):
+        self.assertSequenceEqual(Foo.objects.filter(d__lte=Decimal("123456")), [])
 
     def test_max_digits_validation(self):
         field = models.DecimalField(max_digits=2)

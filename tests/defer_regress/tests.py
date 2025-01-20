@@ -178,6 +178,16 @@ class DeferRegressionTest(TestCase):
             self.assertEqual(i.one_to_one_item.name, "second")
         with self.assertNumQueries(1):
             self.assertEqual(i.value, 42)
+        with self.assertNumQueries(1):
+            i = Item.objects.select_related("one_to_one_item").only(
+                "name", "one_to_one_item__item"
+            )[0]
+            self.assertEqual(i.one_to_one_item.pk, o2o.pk)
+            self.assertEqual(i.name, "first")
+        with self.assertNumQueries(1):
+            self.assertEqual(i.one_to_one_item.name, "second")
+        with self.assertNumQueries(1):
+            self.assertEqual(i.value, 42)
 
     def test_defer_with_select_related(self):
         item1 = Item.objects.create(name="first", value=47)
@@ -271,6 +281,55 @@ class DeferRegressionTest(TestCase):
         with self.assertNumQueries(1):
             self.assertEqual(leaf.second_child.value, 64)
 
+    def test_defer_many_to_many_ignored(self):
+        location = Location.objects.create()
+        request = Request.objects.create(location=location)
+        with self.assertNumQueries(1):
+            self.assertEqual(Request.objects.defer("items").get(), request)
+
+    def test_only_many_to_many_ignored(self):
+        location = Location.objects.create()
+        request = Request.objects.create(location=location)
+        with self.assertNumQueries(1):
+            self.assertEqual(Request.objects.only("items").get(), request)
+
+    def test_defer_reverse_many_to_many_ignored(self):
+        location = Location.objects.create()
+        request = Request.objects.create(location=location)
+        item = Item.objects.create(value=1)
+        request.items.add(item)
+        with self.assertNumQueries(1):
+            self.assertEqual(Item.objects.defer("request").get(), item)
+
+    def test_only_reverse_many_to_many_ignored(self):
+        location = Location.objects.create()
+        request = Request.objects.create(location=location)
+        item = Item.objects.create(value=1)
+        request.items.add(item)
+        with self.assertNumQueries(1):
+            self.assertEqual(Item.objects.only("request").get(), item)
+
+    def test_self_referential_one_to_one(self):
+        first = Item.objects.create(name="first", value=1)
+        second = Item.objects.create(name="second", value=2, source=first)
+        with self.assertNumQueries(1):
+            deferred_first, deferred_second = (
+                Item.objects.select_related("source", "destination")
+                .only("name", "source__name", "destination__value")
+                .order_by("pk")
+            )
+        with self.assertNumQueries(0):
+            self.assertEqual(deferred_first.name, first.name)
+            self.assertEqual(deferred_second.name, second.name)
+            self.assertEqual(deferred_second.source.name, first.name)
+            self.assertEqual(deferred_first.destination.value, second.value)
+        with self.assertNumQueries(1):
+            self.assertEqual(deferred_first.value, first.value)
+        with self.assertNumQueries(1):
+            self.assertEqual(deferred_second.source.value, first.value)
+        with self.assertNumQueries(1):
+            self.assertEqual(deferred_first.destination.name, second.name)
+
 
 class DeferDeletionSignalsTests(TestCase):
     senders = [Item, Proxy]
@@ -284,12 +343,13 @@ class DeferDeletionSignalsTests(TestCase):
         self.post_delete_senders = []
         for sender in self.senders:
             models.signals.pre_delete.connect(self.pre_delete_receiver, sender)
+            self.addCleanup(
+                models.signals.pre_delete.disconnect, self.pre_delete_receiver, sender
+            )
             models.signals.post_delete.connect(self.post_delete_receiver, sender)
-
-    def tearDown(self):
-        for sender in self.senders:
-            models.signals.pre_delete.disconnect(self.pre_delete_receiver, sender)
-            models.signals.post_delete.disconnect(self.post_delete_receiver, sender)
+            self.addCleanup(
+                models.signals.post_delete.disconnect, self.post_delete_receiver, sender
+            )
 
     def pre_delete_receiver(self, sender, **kwargs):
         self.pre_delete_senders.append(sender)

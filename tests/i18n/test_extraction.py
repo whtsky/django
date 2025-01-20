@@ -6,7 +6,7 @@ import time
 import warnings
 from io import StringIO
 from pathlib import Path
-from unittest import mock, skipIf, skipUnless
+from unittest import mock, skipUnless
 
 from admin_scripts.tests import AdminScriptTestCase
 
@@ -25,10 +25,6 @@ from .utils import POFileAssertionMixin, RunInTmpDirMixin, copytree
 
 LOCALE = "de"
 has_xgettext = find_command("xgettext")
-gettext_version = MakeMessagesCommand().gettext_version if has_xgettext else None
-requires_gettext_019 = skipIf(
-    has_xgettext and gettext_version < (0, 19), "gettext 0.19 required"
-)
 
 
 @skipUnless(has_xgettext, "xgettext is mandatory for extraction tests")
@@ -182,6 +178,15 @@ class BasicExtractorTests(ExtractorTests):
         self.assertNotIn("invalid locale en_GB", out.getvalue())
         self.assertIn("processing locale en_GB", out.getvalue())
         self.assertIs(Path("locale/en_GB/LC_MESSAGES/django.po").exists(), True)
+
+    def test_valid_locale_with_numeric_region_code(self):
+        out = StringIO()
+        management.call_command(
+            "makemessages", locale=["ar_002"], stdout=out, verbosity=1
+        )
+        self.assertNotIn("invalid locale ar_002", out.getvalue())
+        self.assertIn("processing locale ar_002", out.getvalue())
+        self.assertIs(Path("locale/ar_002/LC_MESSAGES/django.po").exists(), True)
 
     def test_valid_locale_tachelhit_latin_morocco(self):
         out = StringIO()
@@ -638,6 +643,28 @@ class JavaScriptExtractorTests(ExtractorTests):
         _, po_contents = self._run_makemessages(domain="djangojs")
         self.assertMsgId("Static content inside app should be included.", po_contents)
 
+    def test_i18n_catalog_ignored_when_invoked_for_django(self):
+        # Create target file so it exists in the filesystem and can be ignored.
+        # "invoked_for_django" is True when "conf/locale" folder exists.
+        os.makedirs(os.path.join("conf", "locale"))
+        i18n_catalog_js_dir = os.path.join(os.path.curdir, "views", "templates")
+        os.makedirs(i18n_catalog_js_dir)
+        open(os.path.join(i18n_catalog_js_dir, "i18n_catalog.js"), "w").close()
+
+        out, _ = self._run_makemessages(domain="djangojs")
+        self.assertIn(f"ignoring file i18n_catalog.js in {i18n_catalog_js_dir}", out)
+
+    def test_i18n_catalog_not_ignored_when_not_invoked_for_django(self):
+        # Create target file so it exists in the filesystem but is NOT ignored.
+        # "invoked_for_django" is False when "conf/locale" folder does not exist.
+        self.assertIs(os.path.exists(os.path.join("conf", "locale")), False)
+        i18n_catalog_js = os.path.join("views", "templates", "i18n_catalog.js")
+        os.makedirs(os.path.dirname(i18n_catalog_js))
+        open(i18n_catalog_js, "w").close()
+
+        out, _ = self._run_makemessages(domain="djangojs")
+        self.assertNotIn("ignoring file i18n_catalog.js", out)
+
 
 class IgnoredExtractorTests(ExtractorTests):
     def test_ignore_directory(self):
@@ -814,7 +841,6 @@ class LocationCommentsTests(ExtractorTests):
         self.assertLocationCommentNotPresent(self.PO_FILE, None, ".html.py")
         self.assertLocationCommentPresent(self.PO_FILE, 5, "templates", "test.html")
 
-    @requires_gettext_019
     def test_add_location_full(self):
         """makemessages --add-location=full"""
         management.call_command(
@@ -826,7 +852,6 @@ class LocationCommentsTests(ExtractorTests):
             self.PO_FILE, "Translatable literal #6b", "templates", "test.html"
         )
 
-    @requires_gettext_019
     def test_add_location_file(self):
         """makemessages --add-location=file"""
         management.call_command(
@@ -840,7 +865,6 @@ class LocationCommentsTests(ExtractorTests):
             self.PO_FILE, "Translatable literal #6b", "templates", "test.html"
         )
 
-    @requires_gettext_019
     def test_add_location_never(self):
         """makemessages --add-location=never"""
         management.call_command(
@@ -849,23 +873,21 @@ class LocationCommentsTests(ExtractorTests):
         self.assertTrue(os.path.exists(self.PO_FILE))
         self.assertLocationCommentNotPresent(self.PO_FILE, None, "test.html")
 
-    @mock.patch(
-        "django.core.management.commands.makemessages.Command.gettext_version",
-        new=(0, 18, 99),
-    )
-    def test_add_location_gettext_version_check(self):
-        """
-        CommandError is raised when using makemessages --add-location with
-        gettext < 0.19.
-        """
-        msg = (
-            "The --add-location option requires gettext 0.19 or later. You have "
-            "0.18.99."
+
+class NoObsoleteExtractorTests(ExtractorTests):
+    work_subdir = "obsolete_translations"
+
+    def test_no_obsolete(self):
+        management.call_command(
+            "makemessages", locale=[LOCALE], verbosity=0, no_obsolete=True
         )
-        with self.assertRaisesMessage(CommandError, msg):
-            management.call_command(
-                "makemessages", locale=[LOCALE], verbosity=0, add_location="full"
-            )
+        self.assertIs(os.path.exists(self.PO_FILE), True)
+        with open(self.PO_FILE) as fp:
+            po_contents = fp.read()
+            self.assertNotIn('#~ msgid "Obsolete string."', po_contents)
+            self.assertNotIn('#~ msgstr "Translated obsolete string."', po_contents)
+            self.assertMsgId("This is a translatable string.", po_contents)
+            self.assertMsgStr("This is a translated string.", po_contents)
 
 
 class KeepPotFileExtractorTests(ExtractorTests):

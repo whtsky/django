@@ -1,7 +1,8 @@
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType, ContentTypeManager
+from django.contrib.contenttypes.prefetch import GenericPrefetch
 from django.db import models
-from django.db.migrations.state import ProjectState
+from django.db.migrations.state import ModelState, ProjectState
 from django.test import TestCase, override_settings
 from django.test.utils import isolate_apps
 
@@ -11,9 +12,7 @@ from .models import Author, ConcreteModel, FooWithUrl, ProxyModel
 class ContentTypesTests(TestCase):
     def setUp(self):
         ContentType.objects.clear_cache()
-
-    def tearDown(self):
-        ContentType.objects.clear_cache()
+        self.addCleanup(ContentType.objects.clear_cache)
 
     def test_lookup_cache(self):
         """
@@ -98,6 +97,25 @@ class ContentTypesTests(TestCase):
         cts = ContentType.objects.get_for_models(ContentType)
         self.assertEqual(
             cts, {ContentType: ContentType.objects.get_for_model(ContentType)}
+        )
+
+    @isolate_apps("contenttypes_tests")
+    def test_get_for_models_migrations_create_model(self):
+        state = ProjectState.from_apps(apps.get_app_config("contenttypes"))
+
+        class Foo(models.Model):
+            class Meta:
+                app_label = "contenttypes_tests"
+
+        state.add_model(ModelState.from_model(Foo))
+        ContentType = state.apps.get_model("contenttypes", "ContentType")
+        cts = ContentType.objects.get_for_models(FooWithUrl, Foo)
+        self.assertEqual(
+            cts,
+            {
+                Foo: ContentType.objects.get_for_model(Foo),
+                FooWithUrl: ContentType.objects.get_for_model(FooWithUrl),
+            },
         )
 
     def test_get_for_models_full_cache(self):
@@ -280,7 +298,11 @@ class ContentTypesTests(TestCase):
 
     def test_str(self):
         ct = ContentType.objects.get(app_label="contenttypes_tests", model="site")
-        self.assertEqual(str(ct), "contenttypes_tests | site")
+        self.assertEqual(str(ct), "Contenttypes_Tests | site")
+
+    def test_str_auth(self):
+        ct = ContentType.objects.get(app_label="auth", model="group")
+        self.assertEqual(str(ct), "Authentication and Authorization | group")
 
     def test_name(self):
         ct = ContentType.objects.get(app_label="contenttypes_tests", model="site")
@@ -288,7 +310,7 @@ class ContentTypesTests(TestCase):
 
     def test_app_labeled_name(self):
         ct = ContentType.objects.get(app_label="contenttypes_tests", model="site")
-        self.assertEqual(ct.app_labeled_name, "contenttypes_tests | site")
+        self.assertEqual(ct.app_labeled_name, "Contenttypes_Tests | site")
 
     def test_name_unknown_model(self):
         ct = ContentType(app_label="contenttypes_tests", model="unknown")
@@ -320,7 +342,30 @@ class ContentTypesMultidbTests(TestCase):
         db_for_read().
         """
         ContentType.objects.clear_cache()
-        with self.assertNumQueries(0, using="default"), self.assertNumQueries(
-            1, using="other"
+        with (
+            self.assertNumQueries(0, using="default"),
+            self.assertNumQueries(1, using="other"),
         ):
             ContentType.objects.get_for_model(Author)
+
+
+class GenericPrefetchTests(TestCase):
+    def test_querysets_required(self):
+        msg = (
+            "GenericPrefetch.__init__() missing 1 required "
+            "positional argument: 'querysets'"
+        )
+        with self.assertRaisesMessage(TypeError, msg):
+            GenericPrefetch("question")
+
+    def test_values_queryset(self):
+        msg = "Prefetch querysets cannot use raw(), values(), and values_list()."
+        with self.assertRaisesMessage(ValueError, msg):
+            GenericPrefetch("question", [Author.objects.values("pk")])
+        with self.assertRaisesMessage(ValueError, msg):
+            GenericPrefetch("question", [Author.objects.values_list("pk")])
+
+    def test_raw_queryset(self):
+        msg = "Prefetch querysets cannot use raw(), values(), and values_list()."
+        with self.assertRaisesMessage(ValueError, msg):
+            GenericPrefetch("question", [Author.objects.raw("select pk from author")])

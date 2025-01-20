@@ -1,4 +1,3 @@
-import tempfile
 from io import StringIO
 
 from django.contrib.gis import gdal
@@ -15,6 +14,7 @@ from django.contrib.gis.geos import (
     Polygon,
     fromstr,
 )
+from django.core.files.temp import NamedTemporaryFile
 from django.core.management import call_command
 from django.db import DatabaseError, NotSupportedError, connection
 from django.db.models import F, OuterRef, Subquery
@@ -31,6 +31,7 @@ from .models import (
     NonConcreteModel,
     PennsylvaniaCity,
     State,
+    ThreeDimensionalFeature,
     Track,
 )
 
@@ -232,7 +233,7 @@ class GeoModelTest(TestCase):
         self.assertIn('"point": "%s"' % houston.point.ewkt, result)
 
         # Reload now dumped data
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json") as tmp:
+        with NamedTemporaryFile(mode="w", suffix=".json") as tmp:
             tmp.write(result)
             tmp.seek(0)
             call_command("loaddata", tmp.name, verbosity=0)
@@ -252,7 +253,13 @@ class GeoModelTest(TestCase):
         ]
         for klass in geometry_classes:
             g = klass(srid=4326)
-            feature = Feature.objects.create(name="Empty %s" % klass.__name__, geom=g)
+            model_class = Feature
+            if g.hasz:
+                if not connection.features.supports_3d_storage:
+                    continue
+                else:
+                    model_class = ThreeDimensionalFeature
+            feature = model_class.objects.create(name=f"Empty {klass.__name__}", geom=g)
             feature.refresh_from_db()
             if klass is LinearRing:
                 # LinearRing isn't representable in WKB, so GEOSGeomtry.wkb
@@ -489,6 +496,42 @@ class GeoLookupTest(TestCase):
         with self.assertNoLogs("django.contrib.gis", "ERROR"):
             State.objects.filter(poly__intersects="LINESTRING(0 0, 1 1, 5 5)")
 
+    @skipUnlessGISLookup("coveredby")
+    def test_coveredby_lookup(self):
+        poly = Polygon(LinearRing((0, 0), (0, 5), (5, 5), (5, 0), (0, 0)))
+        state = State.objects.create(name="Test", poly=poly)
+
+        small_poly = Polygon(LinearRing((0, 0), (1, 4), (4, 4), (4, 1), (0, 0)))
+        qs = State.objects.filter(poly__coveredby=small_poly)
+        self.assertSequenceEqual(qs, [])
+
+        large_poly = Polygon(LinearRing((0, 0), (-1, 6), (6, 6), (6, -1), (0, 0)))
+        qs = State.objects.filter(poly__coveredby=large_poly)
+        self.assertSequenceEqual(qs, [state])
+
+        if not connection.ops.oracle:
+            # On Oracle, COVEREDBY doesn't match for EQUAL objects.
+            qs = State.objects.filter(poly__coveredby=poly)
+            self.assertSequenceEqual(qs, [state])
+
+    @skipUnlessGISLookup("covers")
+    def test_covers_lookup(self):
+        poly = Polygon(LinearRing((0, 0), (0, 5), (5, 5), (5, 0), (0, 0)))
+        state = State.objects.create(name="Test", poly=poly)
+
+        small_poly = Polygon(LinearRing((0, 0), (1, 4), (4, 4), (4, 1), (0, 0)))
+        qs = State.objects.filter(poly__covers=small_poly)
+        self.assertSequenceEqual(qs, [state])
+
+        large_poly = Polygon(LinearRing((-1, -1), (-1, 6), (6, 6), (6, -1), (-1, -1)))
+        qs = State.objects.filter(poly__covers=large_poly)
+        self.assertSequenceEqual(qs, [])
+
+        if not connection.ops.oracle:
+            # On Oracle, COVERS doesn't match for EQUAL objects.
+            qs = State.objects.filter(poly__covers=poly)
+            self.assertSequenceEqual(qs, [state])
+
     @skipUnlessDBFeature("supports_relate_lookup")
     def test_relate_lookup(self):
         "Testing the 'relate' lookup type."
@@ -653,8 +696,8 @@ class GeoQuerySetTest(TestCase):
         # flaky.
         for point, ref_city in zip(sorted(line), sorted(ref_points)):
             point_x, point_y = point
-            self.assertAlmostEqual(point_x, ref_city.x, 5),
-            self.assertAlmostEqual(point_y, ref_city.y, 5),
+            self.assertAlmostEqual(point_x, ref_city.x, 5)
+            self.assertAlmostEqual(point_y, ref_city.y, 5)
 
     @skipUnlessDBFeature("supports_union_aggr")
     def test_unionagg(self):

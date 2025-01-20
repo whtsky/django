@@ -10,7 +10,7 @@ from django.core import checks, exceptions, serializers, validators
 from django.core.exceptions import FieldError
 from django.core.management import call_command
 from django.db import IntegrityError, connection, models
-from django.db.models.expressions import Exists, OuterRef, RawSQL, Value
+from django.db.models.expressions import Exists, F, OuterRef, RawSQL, Value
 from django.db.models.functions import Cast, JSONObject, Upper
 from django.test import TransactionTestCase, override_settings, skipUnlessDBFeature
 from django.test.utils import isolate_apps
@@ -28,6 +28,7 @@ from .models import (
     OtherTypesArrayModel,
     PostgreSQLModel,
     Tag,
+    WithSizeArrayModel,
 )
 
 try:
@@ -215,6 +216,16 @@ class TestQuerying(PostgreSQLTestCase):
                 NullableIntegerArrayModel(order=5, field=None),
             ]
         )
+
+    def test_bulk_create_with_sized_arrayfield(self):
+        objs = WithSizeArrayModel.objects.bulk_create(
+            [
+                WithSizeArrayModel(field=[1, 2]),
+                WithSizeArrayModel(field=[3, 4]),
+            ]
+        )
+        self.assertEqual(objs[0].field, [1, 2])
+        self.assertEqual(objs[1].field, [3, 4])
 
     def test_empty_list(self):
         NullableIntegerArrayModel.objects.create(field=[])
@@ -469,6 +480,16 @@ class TestQuerying(PostgreSQLTestCase):
         self.assertIn("GROUP BY 1", sql)
         self.assertIn("ORDER BY 1", sql)
 
+    def test_order_by_arrayagg_index(self):
+        qs = (
+            NullableIntegerArrayModel.objects.values("order")
+            .annotate(ids=ArrayAgg("id"))
+            .order_by("-ids__0")
+        )
+        self.assertQuerySetEqual(
+            qs, [{"order": obj.order, "ids": [obj.id]} for obj in reversed(self.objs)]
+        )
+
     def test_index(self):
         self.assertSequenceEqual(
             NullableIntegerArrayModel.objects.filter(field__0=2), self.objs[1:3]
@@ -537,7 +558,7 @@ class TestQuerying(PostgreSQLTestCase):
             NullableIntegerArrayModel.objects.filter(field__0_2=[2, 3]), self.objs[2:3]
         )
 
-    def test_order_by_slice(self):
+    def test_order_by_index(self):
         more_objs = (
             NullableIntegerArrayModel.objects.create(field=[1, 637]),
             NullableIntegerArrayModel.objects.create(field=[2, 1]),
@@ -583,6 +604,40 @@ class TestQuerying(PostgreSQLTestCase):
             qs.values_list("first_two", flat=True),
             [None, [1], [2], [2, 3], [20, 30]],
         )
+
+    def test_slicing_of_f_expressions(self):
+        tests = [
+            (F("field")[:2], [1, 2]),
+            (F("field")[2:], [3, 4]),
+            (F("field")[1:3], [2, 3]),
+            (F("field")[3], [4]),
+            (F("field")[:3][1:], [2, 3]),  # Nested slicing.
+            (F("field")[:3][1], [2]),  # Slice then index.
+        ]
+        for expression, expected in tests:
+            with self.subTest(expression=expression, expected=expected):
+                instance = IntegerArrayModel.objects.create(field=[1, 2, 3, 4])
+                instance.field = expression
+                instance.save()
+                instance.refresh_from_db()
+                self.assertEqual(instance.field, expected)
+
+    def test_slicing_of_f_expressions_with_annotate(self):
+        IntegerArrayModel.objects.create(field=[1, 2, 3])
+        annotated = IntegerArrayModel.objects.annotate(
+            first_two=F("field")[:2],
+            after_two=F("field")[2:],
+            random_two=F("field")[1:3],
+        ).get()
+        self.assertEqual(annotated.first_two, [1, 2])
+        self.assertEqual(annotated.after_two, [3])
+        self.assertEqual(annotated.random_two, [2, 3])
+
+    def test_slicing_of_f_expressions_with_len(self):
+        queryset = NullableIntegerArrayModel.objects.annotate(
+            subarray=F("field")[:1]
+        ).filter(field__len=F("subarray__len"))
+        self.assertSequenceEqual(queryset, self.objs[:2])
 
     def test_usage_in_subquery(self):
         self.assertSequenceEqual(
@@ -964,6 +1019,32 @@ class TestSerialization(PostgreSQLSimpleTestCase):
         self.assertEqual(instance.field, [1, 2, None])
 
 
+class TestStringSerialization(PostgreSQLSimpleTestCase):
+    field_values = [["Django", "Python", None], ["Джанго", "פייתון", None, "król"]]
+
+    @staticmethod
+    def create_json_data(array_field_value):
+        fields = {"field": json.dumps(array_field_value, ensure_ascii=False)}
+        return json.dumps(
+            [{"model": "postgres_tests.chararraymodel", "pk": None, "fields": fields}]
+        )
+
+    def test_encode(self):
+        for field_value in self.field_values:
+            with self.subTest(field_value=field_value):
+                instance = CharArrayModel(field=field_value)
+                data = serializers.serialize("json", [instance])
+                json_data = self.create_json_data(field_value)
+                self.assertEqual(json.loads(data), json.loads(json_data))
+
+    def test_decode(self):
+        for field_value in self.field_values:
+            with self.subTest(field_value=field_value):
+                json_data = self.create_json_data(field_value)
+                instance = list(serializers.deserialize("json", json_data))[0].object
+                self.assertEqual(instance.field, field_value)
+
+
 class TestValidation(PostgreSQLSimpleTestCase):
     def test_unbounded(self):
         field = ArrayField(models.IntegerField())
@@ -989,6 +1070,13 @@ class TestValidation(PostgreSQLSimpleTestCase):
             cm.exception.messages[0],
             "List contains 4 items, it should contain no more than 3.",
         )
+
+    def test_with_size_singular(self):
+        field = ArrayField(models.IntegerField(), size=1)
+        field.clean([1], None)
+        msg = "List contains 2 items, it should contain no more than 1."
+        with self.assertRaisesMessage(exceptions.ValidationError, msg):
+            field.clean([1, 2], None)
 
     def test_nested_array_mismatch(self):
         field = ArrayField(ArrayField(models.IntegerField()))
@@ -1131,6 +1219,13 @@ class TestSimpleFormField(PostgreSQLSimpleTestCase):
             cm.exception.messages[0],
             "List contains 3 items, it should contain no fewer than 4.",
         )
+
+    def test_min_length_singular(self):
+        field = SimpleArrayField(forms.IntegerField(), min_length=2)
+        field.clean([1, 2])
+        msg = "List contains 1 item, it should contain no fewer than 2."
+        with self.assertRaisesMessage(exceptions.ValidationError, msg):
+            field.clean([1])
 
     def test_required(self):
         field = SimpleArrayField(forms.CharField(), required=True)
@@ -1278,6 +1373,22 @@ class TestSplitFormField(PostgreSQLSimpleTestCase):
                 "characters (it has 3).",
                 "Item 3 in the array did not validate: Ensure this value has at most 2 "
                 "characters (it has 4).",
+            ],
+        )
+
+    def test_invalid_char_length_with_remove_trailing_nulls(self):
+        field = SplitArrayField(
+            forms.CharField(max_length=2, required=False),
+            size=3,
+            remove_trailing_nulls=True,
+        )
+        with self.assertRaises(exceptions.ValidationError) as cm:
+            field.clean(["abc", "", ""])
+        self.assertEqual(
+            cm.exception.messages,
+            [
+                "Item 1 in the array did not validate: Ensure this value has at most 2 "
+                "characters (it has 3).",
             ],
         )
 

@@ -799,6 +799,14 @@ class ManyToOneTests(TestCase):
         # refs #21563
         self.assertFalse(hasattr(Article(), "reporter"))
 
+    def test_create_after_prefetch(self):
+        c = City.objects.create(name="Musical City")
+        d1 = District.objects.create(name="Ladida", city=c)
+        city = City.objects.prefetch_related("districts").get(id=c.id)
+        self.assertSequenceEqual(city.districts.all(), [d1])
+        d2 = city.districts.create(name="Goa")
+        self.assertSequenceEqual(city.districts.all(), [d1, d2])
+
     def test_clear_after_prefetch(self):
         c = City.objects.create(name="Musical City")
         d = District.objects.create(name="Ladida", city=c)
@@ -877,3 +885,28 @@ class ManyToOneTests(TestCase):
             usa.cities.remove(chicago.pk)
         with self.assertRaisesMessage(TypeError, msg):
             usa.cities.set([chicago.pk])
+
+    def test_get_prefetch_querysets_invalid_querysets_length(self):
+        City.objects.create(name="Chicago")
+        cities = City.objects.all()
+        msg = (
+            "querysets argument of get_prefetch_querysets() should have a length of 1."
+        )
+        with self.assertRaisesMessage(ValueError, msg):
+            City.country.get_prefetch_querysets(
+                instances=cities,
+                querysets=[Country.objects.all(), Country.objects.all()],
+            )
+
+    def test_get_prefetch_querysets_reverse_invalid_querysets_length(self):
+        usa = Country.objects.create(name="United States")
+        City.objects.create(name="Chicago")
+        countries = Country.objects.all()
+        msg = (
+            "querysets argument of get_prefetch_querysets() should have a length of 1."
+        )
+        with self.assertRaisesMessage(ValueError, msg):
+            usa.cities.get_prefetch_querysets(
+                instances=countries,
+                querysets=[City.objects.all(), City.objects.all()],
+            )

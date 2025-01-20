@@ -1,9 +1,9 @@
-import os
 import re
 from io import StringIO
 from unittest import mock, skipUnless
 
 from django.core.management import call_command
+from django.core.management.commands import inspectdb
 from django.db import connection
 from django.db.backends.base.introspection import TableInfo
 from django.test import TestCase, TransactionTestCase, skipUnlessDBFeature
@@ -355,6 +355,25 @@ class InspectDBTestCase(TestCase):
         output = out.getvalue()
         self.assertIn("class InspectdbSpecialTableName(models.Model):", output)
 
+    def test_custom_normalize_table_name(self):
+        def pascal_case_table_only(table_name):
+            return table_name.startswith("inspectdb_pascal")
+
+        class MyCommand(inspectdb.Command):
+            def normalize_table_name(self, table_name):
+                normalized_name = table_name.split(".")[1]
+                if connection.features.ignores_table_name_case:
+                    normalized_name = normalized_name.lower()
+                return normalized_name
+
+        out = StringIO()
+        call_command(MyCommand(), table_name_filter=pascal_case_table_only, stdout=out)
+        if connection.features.ignores_table_name_case:
+            expected_model_name = "pascalcase"
+        else:
+            expected_model_name = "PascalCase"
+        self.assertIn(f"class {expected_model_name}(models.Model):", out.getvalue())
+
     @skipUnlessDBFeature("supports_expression_indexes")
     def test_table_with_func_unique_constraint(self):
         out = StringIO()
@@ -588,19 +607,17 @@ class InspectDBTransactionalTests(TransactionTestCase):
                 "CREATE SERVER inspectdb_server FOREIGN DATA WRAPPER file_fdw"
             )
             cursor.execute(
-                connection.ops.compose_sql(
-                    """
-                    CREATE FOREIGN TABLE inspectdb_iris_foreign_table (
-                        petal_length real,
-                        petal_width real,
-                        sepal_length real,
-                        sepal_width real
-                    ) SERVER inspectdb_server OPTIONS (
-                        filename %s
-                    )
-                    """,
-                    [os.devnull],
+                """
+                CREATE FOREIGN TABLE inspectdb_iris_foreign_table (
+                    petal_length real,
+                    petal_width real,
+                    sepal_length real,
+                    sepal_width real
+                ) SERVER inspectdb_server OPTIONS (
+                    program 'echo 1,2,3,4',
+                    format 'csv'
                 )
+                """
             )
         out = StringIO()
         foreign_table_model = "class InspectdbIrisForeignTable(models.Model):"
@@ -638,11 +655,10 @@ class InspectDBTransactionalTests(TransactionTestCase):
             call_command("inspectdb", table_name, stdout=out)
             output = out.getvalue()
             self.assertIn(
-                f"column_1 = models.{field_type}(primary_key=True)  # The composite "
-                f"primary key (column_1, column_2) found, that is not supported. The "
-                f"first column is selected.",
+                "pk = models.CompositePrimaryKey('column_1', 'column_2')",
                 output,
             )
+            self.assertIn(f"column_1 = models.{field_type}()", output)
             self.assertIn(
                 "column_2 = models.%s()"
                 % connection.features.introspected_field_types["IntegerField"],

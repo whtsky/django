@@ -12,12 +12,11 @@ import random
 import sys
 import textwrap
 import unittest
+import unittest.suite
 from collections import defaultdict
 from contextlib import contextmanager
 from importlib import import_module
 from io import StringIO
-
-import sqlparse
 
 import django
 from django.core.management import call_command
@@ -29,6 +28,7 @@ from django.test.utils import setup_test_environment
 from django.test.utils import teardown_databases as _teardown_databases
 from django.test.utils import teardown_test_environment
 from django.utils.datastructures import OrderedSet
+from django.utils.version import PY313
 
 try:
     import ipdb as pdb
@@ -95,9 +95,7 @@ class DebugSQLTextTestResult(unittest.TextTestResult):
             self.stream.writeln(self.separator2)
             self.stream.writeln(err)
             self.stream.writeln(self.separator2)
-            self.stream.writeln(
-                sqlparse.format(sql_debug, reindent=True, keyword_case="upper")
-            )
+            self.stream.writeln(sql_debug)
 
 
 class PDBDebugResult(unittest.TextTestResult):
@@ -124,7 +122,10 @@ class PDBDebugResult(unittest.TextTestResult):
         self.buffer = False
         exc_type, exc_value, traceback = error
         print("\nOpening PDB: %r" % exc_value)
-        pdb.post_mortem(traceback)
+        if PY313:
+            pdb.post_mortem(exc_value)
+        else:
+            pdb.post_mortem(traceback)
 
 
 class DummyList:
@@ -285,9 +286,21 @@ failure and get a correct traceback.
         super().stopTest(test)
         self.events.append(("stopTest", self.test_index))
 
+    def addDuration(self, test, elapsed):
+        super().addDuration(test, elapsed)
+        self.events.append(("addDuration", self.test_index, elapsed))
+
     def addError(self, test, err):
         self.check_picklable(test, err)
-        self.events.append(("addError", self.test_index, err))
+
+        event_occurred_before_first_test = self.test_index == -1
+        if event_occurred_before_first_test and isinstance(
+            test, unittest.suite._ErrorHolder
+        ):
+            self.events.append(("addError", self.test_index, test.id(), err))
+        else:
+            self.events.append(("addError", self.test_index, err))
+
         super().addError(test, err)
 
     def addFailure(self, test, err):
@@ -401,6 +414,7 @@ def _init_worker(
     process_setup=None,
     process_setup_args=None,
     debug_mode=None,
+    used_aliases=None,
 ):
     """
     Switch to databases dedicated to this worker.
@@ -425,7 +439,8 @@ def _init_worker(
         django.setup()
         setup_test_environment(debug=debug_mode)
 
-    for alias in connections:
+    db_aliases = used_aliases if used_aliases is not None else connections
+    for alias in db_aliases:
         connection = connections[alias]
         if start_method == "spawn":
             # Restore initial settings in spawned processes.
@@ -486,13 +501,14 @@ class ParallelTestSuite(unittest.TestSuite):
         self.buffer = buffer
         self.initial_settings = None
         self.serialized_contents = None
+        self.used_aliases = None
         super().__init__()
 
     def run(self, result):
         """
-        Distribute test cases across workers.
+        Distribute TestCases across workers.
 
-        Return an identifier of each test case with its result in order to use
+        Return an identifier of each TestCase with its result in order to use
         imap_unordered to show results as soon as they're available.
 
         To minimize pickling errors when getting results from workers:
@@ -515,6 +531,7 @@ class ParallelTestSuite(unittest.TestSuite):
                 self.process_setup.__func__,
                 self.process_setup_args,
                 self.debug_mode,
+                self.used_aliases,
             ],
         )
         args = [
@@ -538,17 +555,31 @@ class ParallelTestSuite(unittest.TestSuite):
 
             tests = list(self.subsuites[subsuite_index])
             for event in events:
-                event_name = event[0]
-                handler = getattr(result, event_name, None)
-                if handler is None:
-                    continue
-                test = tests[event[1]]
-                args = event[2:]
-                handler(test, *args)
+                self.handle_event(result, tests, event)
 
         pool.join()
 
         return result
+
+    def handle_event(self, result, tests, event):
+        event_name = event[0]
+        handler = getattr(result, event_name, None)
+        if handler is None:
+            return
+        test_index = event[1]
+        event_occurred_before_first_test = test_index == -1
+        if (
+            event_name == "addError"
+            and event_occurred_before_first_test
+            and len(event) >= 4
+        ):
+            test_id = event[2]
+            test = unittest.suite._ErrorHolder(test_id)
+            args = event[3:]
+        else:
+            test = tests[test_index]
+            args = event[2:]
+        handler(test, *args)
 
     def __iter__(self):
         return iter(self.subsuites)
@@ -655,6 +686,7 @@ class DiscoverRunner:
         timing=False,
         shuffle=False,
         logger=None,
+        durations=None,
         **kwargs,
     ):
         self.pattern = pattern
@@ -692,9 +724,15 @@ class DiscoverRunner:
         self.shuffle = shuffle
         self._shuffler = None
         self.logger = logger
+        self.durations = durations
 
     @classmethod
     def add_arguments(cls, parser):
+        parser.add_argument(
+            "--failfast",
+            action="store_true",
+            help="Stops the test suite after the first failure.",
+        )
         parser.add_argument(
             "-t",
             "--top-level-directory",
@@ -790,6 +828,14 @@ class DiscoverRunner:
                 "or substring. Can be used multiple times. Same as "
                 "unittest -k option."
             ),
+        )
+        parser.add_argument(
+            "--durations",
+            dest="durations",
+            type=int,
+            default=None,
+            metavar="N",
+            help="Show the N slowest test cases (N=0 for all).",
         )
 
     @property
@@ -953,12 +999,14 @@ class DiscoverRunner:
             return PDBDebugResult
 
     def get_test_runner_kwargs(self):
-        return {
+        kwargs = {
             "failfast": self.failfast,
             "resultclass": self.get_resultclass(),
             "verbosity": self.verbosity,
             "buffer": self.buffer,
+            "durations": self.durations,
         }
+        return kwargs
 
     def run_checks(self, databases):
         # Checks are run after database creation since some checks require
@@ -1033,6 +1081,7 @@ class DiscoverRunner:
         suite.serialized_aliases = set(
             alias for alias, serialize in databases.items() if serialize
         )
+        suite.used_aliases = set(databases)
         with self.time_keeper.timed("Total database setup"):
             old_config = self.setup_databases(
                 aliases=databases,
@@ -1180,7 +1229,7 @@ def reorder_tests(tests, classes, reverse=False, shuffler=None):
 
 
 def partition_suite_by_case(suite):
-    """Partition a test suite by test case, preserving the order of tests."""
+    """Partition a test suite by TestCase, preserving the order of tests."""
     suite_class = type(suite)
     all_tests = iter_test_cases(suite)
     return [suite_class(tests) for _, tests in itertools.groupby(all_tests, type)]

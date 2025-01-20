@@ -4,10 +4,19 @@ import uuid
 from django.core.exceptions import ImproperlyConfigured
 from django.test import SimpleTestCase
 from django.test.utils import override_settings
-from django.urls import NoReverseMatch, Resolver404, path, re_path, resolve, reverse
+from django.urls import (
+    NoReverseMatch,
+    Resolver404,
+    path,
+    re_path,
+    register_converter,
+    resolve,
+    reverse,
+)
+from django.urls.converters import REGISTERED_CONVERTERS, IntConverter
 from django.views import View
 
-from .converters import DynamicConverter
+from .converters import Base64Converter, DynamicConverter
 from .views import empty_view
 
 included_kwargs = {"base": b"hello", "value": b"world"}
@@ -193,6 +202,20 @@ class SimplifiedURLTests(SimpleTestCase):
         with self.assertRaisesMessage(ImproperlyConfigured, msg):
             path("foo/<nonexistent:var>/", empty_view)
 
+    def test_warning_override_default_converter(self):
+        msg = "Converter 'int' is already registered."
+        with self.assertRaisesMessage(ValueError, msg):
+            register_converter(IntConverter, "int")
+
+    def test_warning_override_converter(self):
+        msg = "Converter 'base64' is already registered."
+        try:
+            with self.assertRaisesMessage(ValueError, msg):
+                register_converter(Base64Converter, "base64")
+                register_converter(Base64Converter, "base64")
+        finally:
+            REGISTERED_CONVERTERS.pop("base64", None)
+
     def test_invalid_view(self):
         msg = "view must be a callable or a list/tuple in the case of include()."
         with self.assertRaisesMessage(TypeError, msg):
@@ -207,14 +230,12 @@ class SimplifiedURLTests(SimpleTestCase):
             path("foo", EmptyCBV())
 
     def test_whitespace_in_route(self):
-        msg = (
-            "URL route 'space/<int:num>/extra/<str:%stest>' cannot contain "
-            "whitespace in angle brackets <…>"
-        )
+        msg = "URL route %r cannot contain whitespace in angle brackets <…>"
         for whitespace in string.whitespace:
             with self.subTest(repr(whitespace)):
-                with self.assertRaisesMessage(ImproperlyConfigured, msg % whitespace):
-                    path("space/<int:num>/extra/<str:%stest>" % whitespace, empty_view)
+                route = "space/<int:num>/extra/<str:%stest>" % whitespace
+                with self.assertRaisesMessage(ImproperlyConfigured, msg % route):
+                    path(route, empty_view)
         # Whitespaces are valid in paths.
         p = path("space%s/<int:num>/" % string.whitespace, empty_view)
         match = p.resolve("space%s/1/" % string.whitespace)

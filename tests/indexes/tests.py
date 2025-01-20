@@ -3,26 +3,16 @@ from unittest import skipUnless
 
 from django.conf import settings
 from django.db import connection
-from django.db.models import (
-    CASCADE,
-    CharField,
-    DateTimeField,
-    ForeignKey,
-    Index,
-    Model,
-    Q,
-)
+from django.db.models import CASCADE, CharField, ForeignKey, Index, Q
 from django.db.models.functions import Lower
 from django.test import (
     TestCase,
     TransactionTestCase,
-    ignore_warnings,
     skipIfDBFeature,
     skipUnlessDBFeature,
 )
-from django.test.utils import isolate_apps, override_settings
+from django.test.utils import override_settings
 from django.utils import timezone
-from django.utils.deprecation import RemovedInDjango51Warning
 
 from .models import Article, ArticleTranslation, IndexedArticle2
 
@@ -80,21 +70,6 @@ class SchemaIndexesTests(TestCase):
             index_sql[0],
         )
 
-    @ignore_warnings(category=RemovedInDjango51Warning)
-    @isolate_apps("indexes")
-    def test_index_together_single_list(self):
-        class IndexTogetherSingleList(Model):
-            headline = CharField(max_length=100)
-            pub_date = DateTimeField()
-
-            class Meta:
-                index_together = ["headline", "pub_date"]
-
-        index_sql = connection.schema_editor()._model_indexes_sql(
-            IndexTogetherSingleList
-        )
-        self.assertEqual(len(index_sql), 1)
-
     def test_columns_list_sql(self):
         index = Index(fields=["headline"], name="whitespace_idx")
         editor = connection.schema_editor()
@@ -111,6 +86,24 @@ class SchemaIndexesTests(TestCase):
             "(%s DESC)" % editor.quote_name("headline"),
             str(index.create_sql(Article, editor)),
         )
+
+    @skipUnlessDBFeature("can_create_inline_fk", "can_rollback_ddl")
+    def test_alter_field_unique_false_removes_deferred_sql(self):
+        field_added = CharField(max_length=127, unique=True)
+        field_added.set_attributes_from_name("charfield_added")
+
+        field_to_alter = CharField(max_length=127, unique=True)
+        field_to_alter.set_attributes_from_name("charfield_altered")
+        altered_field = CharField(max_length=127, unique=False)
+        altered_field.set_attributes_from_name("charfield_altered")
+
+        with connection.schema_editor() as editor:
+            editor.add_field(ArticleTranslation, field_added)
+            editor.add_field(ArticleTranslation, field_to_alter)
+            self.assertEqual(len(editor.deferred_sql), 2)
+            editor.alter_field(ArticleTranslation, field_to_alter, altered_field)
+            self.assertEqual(len(editor.deferred_sql), 1)
+            self.assertIn("charfield_added", str(editor.deferred_sql[0].parts["name"]))
 
 
 class SchemaIndexesNotPostgreSQLTests(TransactionTestCase):

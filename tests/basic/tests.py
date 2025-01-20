@@ -4,7 +4,14 @@ from datetime import datetime, timedelta
 from unittest import mock
 
 from django.core.exceptions import MultipleObjectsReturned, ObjectDoesNotExist
-from django.db import DEFAULT_DB_ALIAS, DatabaseError, connections, models
+from django.db import (
+    DEFAULT_DB_ALIAS,
+    DatabaseError,
+    connection,
+    connections,
+    models,
+    transaction,
+)
 from django.db.models.manager import BaseManager
 from django.db.models.query import MAX_GET_RESULTS, EmptyQuerySet
 from django.test import (
@@ -13,6 +20,8 @@ from django.test import (
     TransactionTestCase,
     skipUnlessDBFeature,
 )
+from django.test.utils import CaptureQueriesContext
+from django.utils.connection import ConnectionDoesNotExist
 from django.utils.translation import gettext_lazy
 
 from .models import (
@@ -20,7 +29,10 @@ from .models import (
     ArticleSelectOnSave,
     ChildPrimaryKeyWithDefault,
     FeaturedArticle,
+    PrimaryKeyWithDbDefault,
     PrimaryKeyWithDefault,
+    PrimaryKeyWithFalseyDbDefault,
+    PrimaryKeyWithFalseyDefault,
     SelfRef,
 )
 
@@ -175,11 +187,30 @@ class ModelInstanceCreationTests(TestCase):
         with self.assertNumQueries(1):
             PrimaryKeyWithDefault().save()
 
+    def test_save_primary_with_default_force_update(self):
+        # An UPDATE attempt is made if explicitly requested.
+        obj = PrimaryKeyWithDefault.objects.create()
+        with self.assertNumQueries(1):
+            PrimaryKeyWithDefault(uuid=obj.pk).save(force_update=True)
+
+    def test_save_primary_with_db_default(self):
+        # An UPDATE attempt is skipped when a primary key has db_default.
+        with self.assertNumQueries(1):
+            PrimaryKeyWithDbDefault().save()
+
     def test_save_parent_primary_with_default(self):
         # An UPDATE attempt is skipped when an inherited primary key has
         # default.
         with self.assertNumQueries(2):
             ChildPrimaryKeyWithDefault().save()
+
+    def test_save_primary_with_falsey_default(self):
+        with self.assertNumQueries(1):
+            PrimaryKeyWithFalseyDefault().save()
+
+    def test_save_primary_with_falsey_db_default(self):
+        with self.assertNumQueries(1):
+            PrimaryKeyWithFalseyDbDefault().save()
 
 
 class ModelTest(TestCase):
@@ -500,6 +531,31 @@ class ModelTest(TestCase):
             Article.objects.get,
             headline__startswith="Area",
         )
+
+    def test_is_pk_unset(self):
+        cases = [
+            Article(),
+            Article(id=None),
+        ]
+        for case in cases:
+            with self.subTest(case=case):
+                self.assertIs(case._is_pk_set(), False)
+
+    def test_is_pk_set(self):
+        def new_instance():
+            a = Article(pub_date=datetime.today())
+            a.save()
+            return a
+
+        cases = [
+            Article(id=1),
+            Article(id=0),
+            Article.objects.create(pub_date=datetime.today()),
+            new_instance(),
+        ]
+        for case in cases:
+            with self.subTest(case=case):
+                self.assertIs(case._is_pk_set(), True)
 
 
 class ModelLookupTest(TestCase):
@@ -906,6 +962,13 @@ class ModelRefreshTests(TestCase):
         article.refresh_from_db()
         self.assertTrue(hasattr(article, "featured"))
 
+    def test_refresh_clears_reverse_related_explicit_fields(self):
+        article = Article.objects.create(headline="Test", pub_date=datetime(2024, 2, 4))
+        self.assertFalse(hasattr(article, "featured"))
+        FeaturedArticle.objects.create(article_id=article.pk)
+        article.refresh_from_db(fields=["featured"])
+        self.assertTrue(hasattr(article, "featured"))
+
     def test_refresh_clears_one_to_one_field(self):
         article = Article.objects.create(
             headline="Parrot programs in Python",
@@ -920,24 +983,78 @@ class ModelRefreshTests(TestCase):
 
     def test_prefetched_cache_cleared(self):
         a = Article.objects.create(pub_date=datetime(2005, 7, 28))
-        s = SelfRef.objects.create(article=a)
+        s = SelfRef.objects.create(article=a, article_cited=a)
         # refresh_from_db() without fields=[...]
-        a1_prefetched = Article.objects.prefetch_related("selfref_set").first()
+        a1_prefetched = Article.objects.prefetch_related("selfref_set", "cited").first()
         self.assertCountEqual(a1_prefetched.selfref_set.all(), [s])
+        self.assertCountEqual(a1_prefetched.cited.all(), [s])
         s.article = None
+        s.article_cited = None
         s.save()
         # Relation is cleared and prefetch cache is stale.
         self.assertCountEqual(a1_prefetched.selfref_set.all(), [s])
+        self.assertCountEqual(a1_prefetched.cited.all(), [s])
         a1_prefetched.refresh_from_db()
         # Cache was cleared and new results are available.
         self.assertCountEqual(a1_prefetched.selfref_set.all(), [])
+        self.assertCountEqual(a1_prefetched.cited.all(), [])
         # refresh_from_db() with fields=[...]
-        a2_prefetched = Article.objects.prefetch_related("selfref_set").first()
+        a2_prefetched = Article.objects.prefetch_related("selfref_set", "cited").first()
         self.assertCountEqual(a2_prefetched.selfref_set.all(), [])
+        self.assertCountEqual(a2_prefetched.cited.all(), [])
         s.article = a
+        s.article_cited = a
         s.save()
         # Relation is added and prefetch cache is stale.
         self.assertCountEqual(a2_prefetched.selfref_set.all(), [])
-        a2_prefetched.refresh_from_db(fields=["selfref_set"])
+        self.assertCountEqual(a2_prefetched.cited.all(), [])
+        fields = ["selfref_set", "cited"]
+        a2_prefetched.refresh_from_db(fields=fields)
+        self.assertEqual(fields, ["selfref_set", "cited"])
         # Cache was cleared and new results are available.
         self.assertCountEqual(a2_prefetched.selfref_set.all(), [s])
+        self.assertCountEqual(a2_prefetched.cited.all(), [s])
+
+    @skipUnlessDBFeature("has_select_for_update")
+    def test_refresh_for_update(self):
+        a = Article.objects.create(pub_date=datetime.now())
+        for_update_sql = connection.ops.for_update_sql()
+
+        with transaction.atomic(), CaptureQueriesContext(connection) as ctx:
+            a.refresh_from_db(from_queryset=Article.objects.select_for_update())
+        self.assertTrue(
+            any(for_update_sql in query["sql"] for query in ctx.captured_queries)
+        )
+
+    def test_refresh_with_related(self):
+        a = Article.objects.create(pub_date=datetime.now())
+        fa = FeaturedArticle.objects.create(article=a)
+
+        from_queryset = FeaturedArticle.objects.select_related("article")
+        with self.assertNumQueries(1):
+            fa.refresh_from_db(from_queryset=from_queryset)
+            self.assertEqual(fa.article.pub_date, a.pub_date)
+        with self.assertNumQueries(2):
+            fa.refresh_from_db()
+            self.assertEqual(fa.article.pub_date, a.pub_date)
+
+    def test_refresh_overwrites_queryset_using(self):
+        a = Article.objects.create(pub_date=datetime.now())
+
+        from_queryset = Article.objects.using("nonexistent")
+        with self.assertRaises(ConnectionDoesNotExist):
+            a.refresh_from_db(from_queryset=from_queryset)
+        a.refresh_from_db(using="default", from_queryset=from_queryset)
+
+    def test_refresh_overwrites_queryset_fields(self):
+        a = Article.objects.create(pub_date=datetime.now())
+        headline = "headline"
+        Article.objects.filter(pk=a.pk).update(headline=headline)
+
+        from_queryset = Article.objects.only("pub_date")
+        with self.assertNumQueries(1):
+            a.refresh_from_db(from_queryset=from_queryset)
+            self.assertNotEqual(a.headline, headline)
+        with self.assertNumQueries(1):
+            a.refresh_from_db(fields=["headline"], from_queryset=from_queryset)
+            self.assertEqual(a.headline, headline)

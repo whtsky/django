@@ -112,6 +112,7 @@ class CsrfViewTests(SimpleTestCase):
         """A custom CSRF_FAILURE_TEMPLATE_NAME is used."""
         response = self.client.post("/")
         self.assertContains(response, "Test template for CSRF failure", status_code=403)
+        self.assertIs(response.wsgi_request, response.context.request)
 
     def test_custom_template_does_not_exist(self):
         """An exception is raised if a nonexistent template is supplied."""
@@ -131,3 +132,15 @@ class CsrfViewTests(SimpleTestCase):
         with mock.patch.object(Path, "open") as m:
             csrf_failure(mock.MagicMock(), mock.Mock())
             m.assert_called_once_with(encoding="utf-8")
+
+    @override_settings(DEBUG=True)
+    @mock.patch("django.views.csrf.get_docs_version", return_value="4.2")
+    def test_doc_links(self, mocked_get_complete_version):
+        response = self.client.post("/")
+        self.assertContains(response, "Forbidden", status_code=403)
+        self.assertNotContains(
+            response, "https://docs.djangoproject.com/en/dev/", status_code=403
+        )
+        self.assertContains(
+            response, "https://docs.djangoproject.com/en/4.2/", status_code=403
+        )

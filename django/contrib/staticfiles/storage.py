@@ -47,6 +47,35 @@ class StaticFilesStorage(FileSystemStorage):
 class HashedFilesMixin:
     default_template = """url("%(url)s")"""
     max_post_process_passes = 5
+    support_js_module_import_aggregation = False
+    _js_module_import_aggregation_patterns = (
+        "*.js",
+        (
+            (
+                (
+                    r"""(?P<matched>import"""
+                    r"""(?s:(?P<import>[\s\{].*?|\*\s*as\s*\w+))"""
+                    r"""\s*from\s*['"](?P<url>[./].*?)["']\s*;)"""
+                ),
+                """import%(import)s from "%(url)s";""",
+            ),
+            (
+                (
+                    r"""(?P<matched>export(?s:(?P<exports>[\s\{].*?))"""
+                    r"""\s*from\s*["'](?P<url>[./].*?)["']\s*;)"""
+                ),
+                """export%(exports)s from "%(url)s";""",
+            ),
+            (
+                r"""(?P<matched>import\s*['"](?P<url>[./].*?)["']\s*;)""",
+                """import"%(url)s";""",
+            ),
+            (
+                r"""(?P<matched>import\(["'](?P<url>.*?)["']\))""",
+                """import("%(url)s")""",
+            ),
+        ),
+    )
     patterns = (
         (
             "*.css",
@@ -58,7 +87,7 @@ class HashedFilesMixin:
                 ),
                 (
                     (
-                        r"(?m)(?P<matched>)^(/\*#[ \t]"
+                        r"(?m)^(?P<matched>/\*#[ \t]"
                         r"(?-i:sourceMappingURL)=(?P<url>.*)[ \t]*\*/)$"
                     ),
                     "/*# sourceMappingURL=%(url)s */",
@@ -69,30 +98,8 @@ class HashedFilesMixin:
             "*.js",
             (
                 (
-                    r"(?m)(?P<matched>)^(//# (?-i:sourceMappingURL)=(?P<url>.*))$",
+                    r"(?m)^(?P<matched>//# (?-i:sourceMappingURL)=(?P<url>.*))$",
                     "//# sourceMappingURL=%(url)s",
-                ),
-                (
-                    (
-                        r"""(?P<matched>import(?s:(?P<import>[\s\{].*?))"""
-                        r"""\s*from\s*['"](?P<url>[\.\/].*?)["']\s*;)"""
-                    ),
-                    """import%(import)s from "%(url)s";""",
-                ),
-                (
-                    (
-                        r"""(?P<matched>export(?s:(?P<exports>[\s\{].*?))"""
-                        r"""\s*from\s*["'](?P<url>[\.\/].*?)["']\s*;)"""
-                    ),
-                    """export%(exports)s from "%(url)s";""",
-                ),
-                (
-                    r"""(?P<matched>import\s*['"](?P<url>[\.\/].*?)["']\s*;)""",
-                    """import"%(url)s";""",
-                ),
-                (
-                    r"""(?P<matched>import\(["'](?P<url>.*?)["']\))""",
-                    """import("%(url)s")""",
                 ),
             ),
         ),
@@ -100,6 +107,8 @@ class HashedFilesMixin:
     keep_intermediate_files = True
 
     def __init__(self, *args, **kwargs):
+        if self.support_js_module_import_aggregation:
+            self.patterns += (self._js_module_import_aggregation_patterns,)
         super().__init__(*args, **kwargs)
         self._patterns = {}
         self.hashed_files = {}
@@ -213,7 +222,7 @@ class HashedFilesMixin:
             url = matches["url"]
 
             # Ignore absolute/protocol-relative and data-uri URLs.
-            if re.match(r"^[a-z]+:", url):
+            if re.match(r"^[a-z]+:", url) or url.startswith("//"):
                 return matched
 
             # Ignore absolute URLs that don't point to a static file (dynamic
@@ -299,22 +308,23 @@ class HashedFilesMixin:
                 processed_adjustable_paths[name] = (name, hashed_name, processed)
 
         paths = {path: paths[path] for path in adjustable_paths}
-        substitutions = False
-
+        unresolved_paths = []
         for i in range(self.max_post_process_passes):
-            substitutions = False
+            unresolved_paths = []
             for name, hashed_name, processed, subst in self._post_process(
                 paths, adjustable_paths, hashed_files
             ):
                 # Overwrite since hashed_name may be newer.
                 processed_adjustable_paths[name] = (name, hashed_name, processed)
-                substitutions = substitutions or subst
+                if subst:
+                    unresolved_paths.append(name)
 
-            if not substitutions:
+            if not unresolved_paths:
                 break
 
-        if substitutions:
-            yield "All", None, RuntimeError("Max post-process passes exceeded.")
+        if unresolved_paths:
+            problem_paths = ", ".join(sorted(unresolved_paths))
+            yield problem_paths, None, RuntimeError("Max post-process passes exceeded.")
 
         # Store the processed paths
         self.hashed_files.update(hashed_files)
@@ -353,7 +363,10 @@ class HashedFilesMixin:
                 # ..to apply each replacement pattern to the content
                 if name in adjustable_paths:
                     old_hashed_name = hashed_name
-                    content = original_file.read().decode("utf-8")
+                    try:
+                        content = original_file.read().decode("utf-8")
+                    except UnicodeDecodeError as exc:
+                        yield name, None, exc, False
                     for extension, patterns in self._patterns.items():
                         if matches_patterns(path, (extension,)):
                             for pattern, template in patterns:
